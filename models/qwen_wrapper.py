@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 import inspect
+import logging
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -36,6 +37,7 @@ class QwenVLWrapper:
         self._patch_torch_autocast()
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
+        self._require_grads_hook = None
         self.processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
         dtype = self._resolve_dtype(config.torch_dtype)
         self.model = self._load_model(config.model_name, dtype)
@@ -76,6 +78,39 @@ class QwenVLWrapper:
         )
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.print_trainable_parameters()
+
+    def _get_input_embeddings(self) -> Optional[torch.nn.Module]:
+        try:
+            return self.model.get_input_embeddings()
+        except Exception:
+            pass
+        for attr in ("language_model", "model", "llm", "text_model", "decoder"):
+            module = getattr(self.model, attr, None)
+            if module is None:
+                continue
+            if hasattr(module, "get_input_embeddings"):
+                try:
+                    return module.get_input_embeddings()
+                except Exception:
+                    continue
+        return None
+
+    def enable_input_require_grads(self) -> bool:
+        emb = self._get_input_embeddings()
+        if emb is None:
+            logging.warning("Could not locate input embeddings for gradient checkpointing.")
+            return False
+
+        def _make_inputs_require_grads(module, inputs, output):
+            if torch.is_tensor(output):
+                output.requires_grad_(True)
+            elif isinstance(output, (tuple, list)):
+                for out in output:
+                    if torch.is_tensor(out):
+                        out.requires_grad_(True)
+
+        self._require_grads_hook = emb.register_forward_hook(_make_inputs_require_grads)
+        return True
 
     @staticmethod
     def _patch_torch_autocast() -> None:

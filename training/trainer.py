@@ -137,8 +137,7 @@ class Trainer:
         if self.config.training.gradient_checkpointing:
             if hasattr(self.qwen.model, "gradient_checkpointing_enable"):
                 self.qwen.model.gradient_checkpointing_enable()
-                if hasattr(self.qwen.model, "enable_input_require_grads"):
-                    self.qwen.model.enable_input_require_grads()
+                self.qwen.enable_input_require_grads()
                 if self.is_main_process:
                     logging.info("Enabled gradient checkpointing.")
 
