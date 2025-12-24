@@ -4,7 +4,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from config.train_config import TrainConfig
 from evaluation.evaluate import evaluate_model, save_results
