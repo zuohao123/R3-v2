@@ -40,12 +40,14 @@ class QwenVLWrapper:
         self._require_grads_hook = None
         self.processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
         dtype = self._resolve_dtype(config.torch_dtype)
+        self.model_dtype = dtype
         self.model = self._load_model(config.model_name, dtype)
-        self.model.to(self.device)
+        self.model.to(self.device, dtype=dtype)
         self.model.train()
 
         if config.use_lora:
             self._apply_lora()
+            self.model.to(self.device, dtype=dtype)
 
         self.teacher = None
         if config.use_teacher:
