@@ -92,6 +92,19 @@ python scripts/build_indices.py \
   --out_dir indices
 ```
 
+## 4b) Build Retrieval Indices (Multi-GPU Sharding)
+
+```bash
+torchrun --nproc_per_node=8 scripts/build_indices.py \
+  --jsonl data/unified/train.jsonl \
+  --image_root data/raw \
+  --out_dir indices \
+  --num_shards 8 \
+  --batch_size 32
+
+python scripts/build_indices.py --out_dir indices --merge_shards 8
+```
+
 ## 5) Train (Single GPU / LoRA recommended first)
 
 ```bash
