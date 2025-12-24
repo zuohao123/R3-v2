@@ -12,8 +12,9 @@ from retrieval.vector_store import FaissVectorStore
 class TextRetriever:
     """Transformer-based text retriever."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, device: Optional[str] = None) -> None:
         self.model_name = model_name
+        self.device = device
         self.model = None
         self.store: Optional[FaissVectorStore] = None
 
@@ -22,12 +23,21 @@ class TextRetriever:
             return
         from sentence_transformers import SentenceTransformer
 
-        self.model = SentenceTransformer(self.model_name)
+        if self.device:
+            self.model = SentenceTransformer(self.model_name, device=self.device)
+        else:
+            self.model = SentenceTransformer(self.model_name)
 
-    def encode_texts(self, texts: List[str]) -> np.ndarray:
+    def encode_texts(self, texts: List[str], batch_size: int = 64) -> np.ndarray:
         self._ensure_model()
         assert self.model is not None
-        return self.model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+        return self.model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+            batch_size=batch_size,
+            show_progress_bar=False,
+        )
 
     def build_index(
         self,
