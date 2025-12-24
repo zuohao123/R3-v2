@@ -68,11 +68,13 @@ def _normalize_answer(value: Any) -> str:
     return str(value).strip()
 
 
-def export_split(ds, split: str, out_dir: str) -> None:
+def export_split(ds, split: str, out_dir: str, log_every: int) -> None:
     """Export one split into images and JSONL."""
     images_dir = os.path.join(out_dir, "images")
     raw_path = os.path.join(out_dir, f"chartqa_raw_{split}.jsonl")
     records: List[Dict[str, Any]] = []
+    total = len(ds)
+    logging.info("Exporting %s split with %d samples", split, total)
     for idx, sample in enumerate(ds):
         image_value = _get_first(sample, ["image", "img", "image_path", "image_file"])
         if image_value is None:
@@ -96,6 +98,8 @@ def export_split(ds, split: str, out_dir: str) -> None:
                 "split": split,
             }
         )
+        if log_every > 0 and ((idx + 1) % log_every == 0 or (idx + 1) == total):
+            logging.info("Progress %s: %d/%d", split, idx + 1, total)
     write_jsonl(raw_path, records)
     logging.info("Wrote %s with %d samples", raw_path, len(records))
 
@@ -103,6 +107,12 @@ def export_split(ds, split: str, out_dir: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download ChartQA dataset.")
     parser.add_argument("--out_dir", required=True, help="Output directory")
+    parser.add_argument(
+        "--log_every",
+        type=int,
+        default=500,
+        help="Log progress every N samples",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -111,7 +121,7 @@ def main() -> None:
     ds = load_dataset("HuggingFaceM4/ChartQA")
     for split in ds.keys():
         logging.info("Processing split: %s", split)
-        export_split(ds[split], split, args.out_dir)
+        export_split(ds[split], split, args.out_dir, args.log_every)
 
 
 if __name__ == "__main__":
