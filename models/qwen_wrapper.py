@@ -15,6 +15,24 @@ except ImportError:  # pragma: no cover - older transformers
     AutoModelForVision2Seq = None
 
 
+def _patch_torch_autocast() -> None:
+    """Shim torch.is_autocast_enabled for older torch versions."""
+    try:
+        torch.is_autocast_enabled("cuda")
+        return
+    except TypeError:
+        pass
+    orig = torch.is_autocast_enabled
+
+    def _is_autocast_enabled(*args, **kwargs):
+        return orig()
+
+    torch.is_autocast_enabled = _is_autocast_enabled  # type: ignore[assignment]
+
+
+_patch_torch_autocast()
+
+
 @dataclass
 class QwenVLConfig:
     """Configuration for Qwen VL wrapper."""
@@ -111,39 +129,6 @@ class QwenVLWrapper:
 
         self._require_grads_hook = emb.register_forward_hook(_make_inputs_require_grads)
         return True
-
-
-def _patch_torch_autocast() -> None:
-    """Shim torch.is_autocast_enabled for older torch versions."""
-    try:
-        torch.is_autocast_enabled("cuda")
-        return
-    except TypeError:
-        pass
-    orig = torch.is_autocast_enabled
-
-    def _is_autocast_enabled(*args, **kwargs):
-        return orig()
-
-    torch.is_autocast_enabled = _is_autocast_enabled  # type: ignore[assignment]
-
-
-_patch_torch_autocast()
-
-    @staticmethod
-    def _patch_torch_autocast() -> None:
-        """Shim torch.is_autocast_enabled for older torch versions."""
-        try:
-            sig = inspect.signature(torch.is_autocast_enabled)
-        except (TypeError, ValueError):
-            return
-        if len(sig.parameters) == 0:
-            orig = torch.is_autocast_enabled
-
-            def _is_autocast_enabled(*args, **kwargs):
-                return orig()
-
-            torch.is_autocast_enabled = _is_autocast_enabled  # type: ignore[assignment]
 
     def _load_model(self, model_name: str, dtype: torch.dtype) -> torch.nn.Module:
         load_errors = []
