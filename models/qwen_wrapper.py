@@ -117,9 +117,32 @@ class QwenVLWrapper:
             return torch.bfloat16
         return torch.float32
 
+    def _build_user_text(self, question: str, pseudo_text: Optional[str]) -> str:
+        if pseudo_text:
+            return f"{question}\nContext: {pseudo_text}"
+        return question
+
+    def _build_messages(
+        self, question: str, pseudo_text: Optional[str], answer: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        content = [
+            {"type": "image"},
+            {"type": "text", "text": self._build_user_text(question, pseudo_text)},
+        ]
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": content}]
+        if answer is not None:
+            messages.append(
+                {"role": "assistant", "content": [{"type": "text", "text": answer}]}
+            )
+        return messages
+
     def build_prompt(self, question: str, pseudo_text: Optional[str] = None) -> str:
         """Build a prompt with image placeholder and optional pseudo-text."""
-        # TODO: Swap to the official Qwen3-VL chat template if needed.
+        if hasattr(self.processor, "apply_chat_template"):
+            messages = self._build_messages(question, pseudo_text)
+            return self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
         context = f"Context: {pseudo_text}\n" if pseudo_text else ""
         return f"<image>\nQuestion: {question}\n{context}Answer:"
 
@@ -156,14 +179,33 @@ class QwenVLWrapper:
         answers: Optional[List[str]] = None,
         max_length: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
-        prompts = [
-            self.build_prompt(q, p)
-            for q, p in zip(questions, pseudo_texts or [""] * len(questions))
-        ]
-        if answers is not None:
-            full_texts = [f"{p} {a}" for p, a in zip(prompts, answers)]
+        pseudo_texts = pseudo_texts or [""] * len(questions)
+        prompts: List[str] = []
+        full_texts: List[str] = []
+        if hasattr(self.processor, "apply_chat_template"):
+            for q, p, a in zip(questions, pseudo_texts, answers or [None] * len(questions)):
+                prompt = self.processor.apply_chat_template(
+                    self._build_messages(q, p),
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                prompts.append(prompt)
+                if answers is not None:
+                    full_texts.append(
+                        self.processor.apply_chat_template(
+                            self._build_messages(q, p, a),
+                            tokenize=False,
+                            add_generation_prompt=False,
+                        )
+                    )
+            if answers is None:
+                full_texts = prompts
         else:
-            full_texts = prompts
+            prompts = [self.build_prompt(q, p) for q, p in zip(questions, pseudo_texts)]
+            if answers is not None:
+                full_texts = [f"{p} {a}" for p, a in zip(prompts, answers)]
+            else:
+                full_texts = prompts
         inputs = self.processor(
             images=images,
             text=full_texts,
@@ -237,10 +279,8 @@ class QwenVLWrapper:
         pseudo_texts: Optional[List[str]] = None,
         max_new_tokens: int = 64,
     ) -> List[str]:
-        prompts = [
-            self.build_prompt(q, p)
-            for q, p in zip(questions, pseudo_texts or [""] * len(questions))
-        ]
+        pseudo_texts = pseudo_texts or [""] * len(questions)
+        prompts = [self.build_prompt(q, p) for q, p in zip(questions, pseudo_texts)]
         inputs = self.processor(
             images=images,
             text=prompts,
@@ -257,8 +297,10 @@ class QwenVLWrapper:
             )
         decoded = self.processor.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         answers = []
-        for text in decoded:
-            if "Answer:" in text:
+        for prompt, text in zip(prompts, decoded):
+            if text.startswith(prompt):
+                answers.append(text[len(prompt) :].strip())
+            elif "Answer:" in text:
                 answers.append(text.split("Answer:", 1)[-1].strip())
             else:
                 answers.append(text.strip())
