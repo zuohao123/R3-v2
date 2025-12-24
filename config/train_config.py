@@ -109,6 +109,7 @@ class TrainingConfig:
     seed: int = 42
     bf16: bool = True
     fp16: bool = False
+    sampling_alpha: Optional[float] = None
     distributed_backend: str = "none"  # "none", "fsdp", "deepspeed"
     deepspeed_config: Optional[str] = None
     fsdp_min_num_params: int = 100_000_000

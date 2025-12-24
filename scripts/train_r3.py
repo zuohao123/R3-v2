@@ -23,6 +23,12 @@ def main() -> None:
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--grad_accum", type=int, default=1)
+    parser.add_argument(
+        "--sampling_alpha",
+        type=float,
+        default=None,
+        help="Temperature sampling alpha in [0,1]; smaller = more balanced",
+    )
     parser.add_argument("--use_lora", action="store_true")
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--fp16", action="store_true")
@@ -66,6 +72,7 @@ def main() -> None:
     cfg.training.num_epochs = args.num_epochs
     cfg.training.learning_rate = args.learning_rate
     cfg.training.gradient_accumulation = args.grad_accum
+    cfg.training.sampling_alpha = args.sampling_alpha
     cfg.model.use_lora = args.use_lora
     cfg.training.bf16 = args.bf16 or cfg.training.bf16
     cfg.training.fp16 = args.fp16

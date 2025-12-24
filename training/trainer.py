@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from typing import Any, Dict, Optional
 
@@ -17,7 +18,7 @@ from torch.distributed.fsdp import (
     StateDictType,
 )
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 import functools
 
@@ -58,6 +59,45 @@ class R3TrainModule(torch.nn.Module):
             top_k,
         )
         return bundle["outputs"]
+
+
+class DistributedTemperatureSampler(Sampler[int]):
+    """Distributed weighted sampler with temperature smoothing."""
+
+    def __init__(
+        self,
+        weights: torch.Tensor,
+        num_replicas: int,
+        rank: int,
+        seed: int,
+        drop_last: bool = False,
+    ) -> None:
+        self.weights = weights
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.seed = seed
+        self.drop_last = drop_last
+        self.epoch = 0
+        if self.drop_last:
+            self.num_samples = len(self.weights) // self.num_replicas
+        else:
+            self.num_samples = int(math.ceil(len(self.weights) / self.num_replicas))
+        self.total_size = self.num_samples * self.num_replicas
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        indices = torch.multinomial(
+            self.weights, self.total_size, replacement=True, generator=generator
+        ).tolist()
+        indices = indices[: self.total_size]
+        return iter(indices[self.rank : self.total_size : self.num_replicas])
+
+    def __len__(self) -> int:
+        return self.num_samples
 
 
 class Trainer:
@@ -144,13 +184,30 @@ class Trainer:
 
         self.train_sampler = None
         self.val_sampler = None
-        if self.distributed:
+        sampling_alpha = config.training.sampling_alpha
+        if sampling_alpha is not None:
+            weights = self._build_sampling_weights(self.train_dataset, sampling_alpha)
+            if self.distributed:
+                self.train_sampler = DistributedTemperatureSampler(
+                    weights,
+                    num_replicas=self.world_size,
+                    rank=self.rank,
+                    seed=config.training.seed,
+                )
+            else:
+                self.train_sampler = WeightedRandomSampler(
+                    weights,
+                    num_samples=len(weights),
+                    replacement=True,
+                )
+        elif self.distributed:
             self.train_sampler = DistributedSampler(
                 self.train_dataset,
                 num_replicas=self.world_size,
                 rank=self.rank,
                 shuffle=True,
             )
+        if self.distributed:
             self.val_sampler = DistributedSampler(
                 self.val_dataset,
                 num_replicas=self.world_size,
@@ -190,6 +247,33 @@ class Trainer:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+
+    @staticmethod
+    def _dataset_name(image_path: str) -> str:
+        if not image_path:
+            return "unknown"
+        parts = image_path.split("/")
+        return parts[0] if parts else "unknown"
+
+    def _build_sampling_weights(
+        self, dataset: UnifiedQADataset, alpha: float
+    ) -> torch.Tensor:
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("sampling_alpha must be in [0, 1].")
+        counts: Dict[str, int] = {}
+        for item in dataset.samples:
+            name = self._dataset_name(item.image_path)
+            counts[name] = counts.get(name, 0) + 1
+        weights = []
+        for item in dataset.samples:
+            name = self._dataset_name(item.image_path)
+            count = max(1, counts.get(name, 1))
+            weight = count ** (alpha - 1.0)
+            weights.append(weight)
+        weights_tensor = torch.tensor(weights, dtype=torch.double)
+        if self.is_main_process:
+            logging.info("Temperature sampling alpha=%.2f, dataset counts=%s", alpha, counts)
+        return weights_tensor
 
     def _init_distributed(self) -> None:
         self.distributed = False
@@ -370,7 +454,8 @@ class Trainer:
 
         for epoch in range(self.config.training.num_epochs):
             if self.train_sampler is not None:
-                self.train_sampler.set_epoch(epoch)
+                if hasattr(self.train_sampler, "set_epoch"):
+                    self.train_sampler.set_epoch(epoch)
             for batch in self.train_loader:
                 if total_steps is not None and global_step >= total_steps:
                     return

@@ -103,6 +103,7 @@ python scripts/train_r3.py \
   --index_dir indices \
   --bf16 \
   --batch_size 1 \
+  --sampling_alpha 0.5 \
   --use_lora
 ```
 
@@ -118,6 +119,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --index_dir indices \
   --bf16 \
   --batch_size 1 \
+  --sampling_alpha 0.5 \
   --grad_accum 2
 ```
 
@@ -134,6 +136,7 @@ deepspeed --num_gpus=8 scripts/train_r3.py \
   --index_dir indices \
   --bf16 \
   --batch_size 1 \
+  --sampling_alpha 0.5 \
   --grad_accum 2
 ```
 
