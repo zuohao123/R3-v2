@@ -5,7 +5,12 @@ import argparse
 import json
 import logging
 import os
+import sys
 from typing import Any, Dict, Iterable, List, Optional
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import numpy as np
 from PIL import Image
