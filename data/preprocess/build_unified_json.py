@@ -159,7 +159,13 @@ def build_chartqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
 def build_infovqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str] = None) -> None:
     """Convert InfoVQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "infovqa_raw_train.jsonl")
-    test_path = os.path.join(raw_dir, "infovqa_raw_test.jsonl")
+    eval_path = _first_existing(
+        [
+            os.path.join(raw_dir, "infovqa_raw_val.jsonl"),
+            os.path.join(raw_dir, "infovqa_raw_validation.jsonl"),
+            os.path.join(raw_dir, "infovqa_raw_test.jsonl"),
+        ]
+    )
 
     train_records = _read_jsonl(train_path)
     unified_train = []
@@ -179,23 +185,31 @@ def build_infovqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
     _write_jsonl(os.path.join(out_dir, "infovqa_unified_train.jsonl"), unified_train)
     logging.info("Wrote InfoVQA train: %d", len(unified_train))
 
-    test_records = _read_jsonl(test_path)
-    unified_test = []
-    for raw in test_records:
-        question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-        answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
-        unified_test.append(
-            {
-                "image_path": _apply_prefix(raw["image_path"], image_prefix),
-                "question": question,
-                "answer": answer,
-                "pseudo_text": (
-                    f"INFOVQA_CONTEXT: {question} [PREDICTED_TYPE:INFOGRAPHIC]"
-                ),
-            }
+    if eval_path and os.path.exists(eval_path):
+        eval_records = _read_jsonl(eval_path)
+        unified_eval = []
+        for raw in eval_records:
+            question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
+            answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            unified_eval.append(
+                {
+                    "image_path": _apply_prefix(raw["image_path"], image_prefix),
+                    "question": question,
+                    "answer": answer,
+                    "pseudo_text": (
+                        f"INFOVQA_CONTEXT: {question} [PREDICTED_TYPE:INFOGRAPHIC]"
+                    ),
+                }
+            )
+        out_name = (
+            "infovqa_unified_test.jsonl"
+            if eval_path.endswith("_test.jsonl")
+            else "infovqa_unified_val.jsonl"
         )
-    _write_jsonl(os.path.join(out_dir, "infovqa_unified_test.jsonl"), unified_test)
-    logging.info("Wrote InfoVQA test: %d", len(unified_test))
+        _write_jsonl(os.path.join(out_dir, out_name), unified_eval)
+        logging.info("Wrote InfoVQA eval: %s (%d)", out_name, len(unified_eval))
+    else:
+        logging.warning("InfoVQA eval file not found; skipping val/test split.")
 
 
 def main() -> None:
