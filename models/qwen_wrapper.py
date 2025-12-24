@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoProcessor
 
+try:
+    from transformers import AutoModelForVision2Seq
+except ImportError:  # pragma: no cover - older transformers
+    AutoModelForVision2Seq = None
+
 
 @dataclass
 class QwenVLConfig:
@@ -30,11 +35,7 @@ class QwenVLWrapper:
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
         dtype = self._resolve_dtype(config.torch_dtype)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            config.model_name,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        )
+        self.model = self._load_model(config.model_name, dtype)
         self.model.to(self.device)
         self.model.train()
 
@@ -70,6 +71,40 @@ class QwenVLWrapper:
         )
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.print_trainable_parameters()
+
+    def _load_model(self, model_name: str, dtype: torch.dtype) -> torch.nn.Module:
+        load_errors = []
+        if AutoModelForVision2Seq is not None:
+            try:
+                return AutoModelForVision2Seq.from_pretrained(
+                    model_name,
+                    torch_dtype=dtype,
+                    trust_remote_code=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - surfacing error detail
+                load_errors.append(f"AutoModelForVision2Seq: {exc}")
+        try:
+            return AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfacing error detail
+            load_errors.append(f"AutoModelForCausalLM: {exc}")
+        try:
+            from transformers import AutoModel
+
+            return AutoModel.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfacing error detail
+            load_errors.append(f"AutoModel: {exc}")
+        raise RuntimeError(
+            "Failed to load model with AutoModelForVision2Seq/AutoModelForCausalLM/AutoModel. "
+            + " | ".join(load_errors)
+        )
 
     @staticmethod
     def _resolve_dtype(dtype_str: str) -> torch.dtype:
