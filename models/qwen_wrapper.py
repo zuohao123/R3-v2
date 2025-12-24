@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-import inspect
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -34,7 +33,6 @@ class QwenVLWrapper:
     """Thin wrapper around Qwen3-VL for training and generation."""
 
     def __init__(self, config: QwenVLConfig) -> None:
-        self._patch_torch_autocast()
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self._require_grads_hook = None
@@ -113,6 +111,24 @@ class QwenVLWrapper:
 
         self._require_grads_hook = emb.register_forward_hook(_make_inputs_require_grads)
         return True
+
+
+def _patch_torch_autocast() -> None:
+    """Shim torch.is_autocast_enabled for older torch versions."""
+    try:
+        torch.is_autocast_enabled("cuda")
+        return
+    except TypeError:
+        pass
+    orig = torch.is_autocast_enabled
+
+    def _is_autocast_enabled(*args, **kwargs):
+        return orig()
+
+    torch.is_autocast_enabled = _is_autocast_enabled  # type: ignore[assignment]
+
+
+_patch_torch_autocast()
 
     @staticmethod
     def _patch_torch_autocast() -> None:
