@@ -11,6 +11,7 @@ transformers>=4.40.0
 datasets>=2.16.0
 sentence-transformers>=2.2.2
 peft>=0.10.0
+huggingface-hub>=0.22.0
 
 # Retrieval
 faiss-gpu>=1.7.1.post3; platform_system == "Linux"

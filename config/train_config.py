@@ -8,7 +8,7 @@ from typing import List, Optional
 @dataclass
 class ModelConfig:
     """Model and adapter configuration."""
-    model_name: str = "Qwen/Qwen3-VL-8B-Instruct"
+    model_name: str = "models/Qwen3-VL-8B-Instruct"
     torch_dtype: str = "bf16"  # "bf16" or "fp16"
     device: str = "cuda"
     use_lora: bool = False
@@ -42,8 +42,8 @@ class RetrievalConfig:
     text_index_path: str = "indices/text.index"
     text_meta_path: str = "indices/text.meta.json"
     text_embeds_path: str = "indices/text.embeds.npy"
-    image_encoder_name: str = "openai/clip-vit-base-patch32"
-    text_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    image_encoder_name: str = "models/clip-vit-base-patch32"
+    text_encoder_name: str = "models/all-MiniLM-L6-v2"
     top_k: int = 5
     use_retrieval: bool = True
 

@@ -9,8 +9,21 @@ It also flags current limitations around full fine-tuning on 8x V100.
 pip install --upgrade pip
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install transformers datasets pillow sentence-transformers peft
+pip install huggingface-hub
 pip install faiss-gpu  # or faiss-cpu if you do not have CUDA
 ```
+
+## 0.5) Download Retrieval Backbones (CLIP + Text Encoder)
+
+```bash
+python scripts/download_retrieval_models.py --out_dir models
+```
+
+This writes:
+- `models/clip-vit-base-patch32`
+- `models/all-MiniLM-L6-v2`
+
+These paths are now the default in `config/train_config.py`.
 
 ## 1) Download Raw Datasets
 
