@@ -83,6 +83,7 @@ python scripts/build_indices.py \
 
 ```bash
 python scripts/train_r3.py \
+  --model_name models/Qwen3-VL-8B-Instruct \
   --train_jsonl data/unified/train.jsonl \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
@@ -97,6 +98,7 @@ python scripts/train_r3.py \
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
   --train_jsonl data/unified/train.jsonl \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
@@ -112,6 +114,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
 deepspeed --num_gpus=8 scripts/train_r3.py \
   --backend deepspeed \
   --deepspeed_config configs/deepspeed_zero3.json \
+  --model_name models/Qwen3-VL-8B-Instruct \
   --train_jsonl data/unified/train.jsonl \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
@@ -133,6 +136,7 @@ python -m deepspeed.utils.zero_to_fp32 \
 ```bash
 python scripts/eval_r3.py \
   --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices
