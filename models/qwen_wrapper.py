@@ -20,6 +20,7 @@ class QwenVLConfig:
     model_name: str = "Qwen/Qwen3-VL-8B-Instruct"
     torch_dtype: str = "bf16"
     device: str = "cuda"
+    use_teacher: bool = True
     use_lora: bool = False
     lora_r: int = 16
     lora_alpha: int = 32
@@ -42,9 +43,11 @@ class QwenVLWrapper:
         if config.use_lora:
             self._apply_lora()
 
-        self.teacher = copy.deepcopy(self.model)
-        self.teacher.requires_grad_(False)
-        self.teacher.eval()
+        self.teacher = None
+        if config.use_teacher:
+            self.teacher = copy.deepcopy(self.model)
+            self.teacher.requires_grad_(False)
+            self.teacher.eval()
 
     @property
     def tokenizer(self):
@@ -221,6 +224,8 @@ class QwenVLWrapper:
         answers: Optional[List[str]] = None,
         max_length: Optional[int] = None,
     ) -> Any:
+        if self.teacher is None:
+            raise RuntimeError("Teacher model is disabled. Set use_teacher=True to enable it.")
         inputs = self.encode_inputs(images, questions, pseudo_texts, answers, max_length)
         with torch.no_grad():
             return self.teacher(**inputs)

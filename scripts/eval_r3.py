@@ -117,6 +117,7 @@ def main() -> None:
         model_name=cfg.model.model_name,
         torch_dtype=cfg.model.torch_dtype,
         device=cfg.model.device,
+        use_teacher=False,
         use_lora=cfg.model.use_lora,
         lora_r=cfg.model.lora_r,
         lora_alpha=cfg.model.lora_alpha,

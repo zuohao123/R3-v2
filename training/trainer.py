@@ -126,6 +126,7 @@ class Trainer:
             model_name=config.model.model_name,
             torch_dtype=config.model.torch_dtype,
             device=config.model.device,
+            use_teacher=config.training.use_teacher,
             use_lora=config.model.use_lora,
             lora_r=config.model.lora_r,
             lora_alpha=config.model.lora_alpha,
