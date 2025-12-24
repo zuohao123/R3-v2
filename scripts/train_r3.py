@@ -21,8 +21,13 @@ def main() -> None:
     )
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_epochs", type=int, default=1)
+    parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--grad_accum", type=int, default=1)
+    parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument("--sample_every", type=int, default=0)
+    parser.add_argument("--sample_num", type=int, default=1)
+    parser.add_argument("--sample_max_new_tokens", type=int, default=32)
     parser.add_argument(
         "--sampling_alpha",
         type=float,
@@ -70,8 +75,13 @@ def main() -> None:
         cfg.model.model_name = args.model_name
     cfg.training.batch_size = args.batch_size
     cfg.training.num_epochs = args.num_epochs
+    cfg.training.max_steps = args.max_steps
     cfg.training.learning_rate = args.learning_rate
     cfg.training.gradient_accumulation = args.grad_accum
+    cfg.training.log_every = args.log_every
+    cfg.training.sample_every = args.sample_every
+    cfg.training.sample_num = args.sample_num
+    cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
     cfg.training.sampling_alpha = args.sampling_alpha
     cfg.model.use_lora = args.use_lora
     cfg.training.bf16 = args.bf16 or cfg.training.bf16

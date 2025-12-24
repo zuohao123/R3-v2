@@ -355,7 +355,8 @@ class R3(nn.Module):
         corruption_level: float,
         top_k: int,
         max_new_tokens: int,
-    ) -> List[str]:
+        return_retrieval: bool = False,
+    ) -> Any:
         if self.config.enable_corruption:
             corr_images, corr_texts, _, _ = self.corruptor(
                 images, pseudo_texts, corruption_level
@@ -374,7 +375,11 @@ class R3(nn.Module):
                 for text, ctx in zip(corr_texts, contexts)
             ]
         else:
+            contexts = ["" for _ in corr_texts]
             aug_pseudo_texts = corr_texts
-        return self.qwen.generate_answer(
+        answers = self.qwen.generate_answer(
             corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
         )
+        if return_retrieval:
+            return answers, retrieved_texts, retrieved_images, contexts
+        return answers
