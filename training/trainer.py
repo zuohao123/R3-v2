@@ -24,7 +24,7 @@ import functools
 from config.train_config import TrainConfig
 from data.datasets import UnifiedQACollator, UnifiedQADataset
 from models.qwen_wrapper import QwenVLConfig, QwenVLWrapper
-from models.r3_modules import R3PlusPlus
+from models.r3_modules import R3
 from retrieval.image_retrieval import ImageRetriever
 from retrieval.text_retrieval import TextRetriever
 from training.curriculum import CurriculumScheduler
@@ -34,7 +34,7 @@ from training.losses import compute_total_loss
 class R3TrainModule(torch.nn.Module):
     """Trainable module wrapping Qwen and R3++ for DeepSpeed."""
 
-    def __init__(self, qwen: QwenVLWrapper, r3: R3PlusPlus) -> None:
+    def __init__(self, qwen: QwenVLWrapper, r3: R3) -> None:
         super().__init__()
         self.qwen_model = qwen.model
         self.r3 = r3
@@ -112,7 +112,7 @@ class Trainer:
                 config.retrieval.image_embeds_path,
             )
 
-        self.r3 = R3PlusPlus(self.qwen, self.text_retriever, self.image_retriever, config.r3)
+        self.r3 = R3(self.qwen, self.text_retriever, self.image_retriever, config.r3)
         self.r3.to(self.device)
 
         self.engine = None

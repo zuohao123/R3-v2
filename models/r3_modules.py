@@ -168,7 +168,7 @@ class AdaptiveGate(nn.Module):
         return torch.softmax(logits, dim=-1)
 
 
-class R3PlusPlus(nn.Module):
+class R3(nn.Module):
     """Orchestrate corruption, retrieval, and reconstruction."""
 
     def __init__(
@@ -194,10 +194,23 @@ class R3PlusPlus(nn.Module):
         self.text_dim = text_dim
         self.image_dim = image_dim
 
-        self.prefix_enhancer = PrefixEnhancer(text_dim, config.hidden_dim, config.prefix_len)
-        self.memory_aligner = MemoryAligner(text_dim, image_dim, config.hidden_dim)
-        self.latent_tokens = LatentImputationTokens(config.latent_tokens, config.hidden_dim)
-        self.gate = AdaptiveGate(config.hidden_dim)
+        self.prefix_enhancer = (
+            PrefixEnhancer(text_dim, config.hidden_dim, config.prefix_len)
+            if config.enable_prefix
+            else None
+        )
+        self.memory_aligner = (
+            MemoryAligner(text_dim, image_dim, config.hidden_dim)
+            if config.enable_memory
+            else None
+        )
+        self.latent_tokens = (
+            LatentImputationTokens(config.latent_tokens, config.hidden_dim)
+            if config.enable_latent_tokens
+            else None
+        )
+        self.gate = AdaptiveGate(config.hidden_dim) if config.enable_gate else None
+        self.vis_proj = nn.Linear(image_dim, config.hidden_dim)
 
     def _compose_context(
         self,
@@ -215,15 +228,15 @@ class R3PlusPlus(nn.Module):
             selected.extend(texts[:n_text])
             selected.extend(imgs[:n_img])
             context = " ".join(selected)
-            if g_v > 0.5:
+            if context and g_v > 0.5:
                 context += " [VISUAL_CONF_HIGH]"
             contexts.append(context.strip())
         return contexts
 
     def _retrieve_texts(self, queries: List[str], top_k: int) -> Tuple[torch.Tensor, List[List[str]]]:
-        if self.text_retriever is None:
+        if self.text_retriever is None or not self.config.enable_text_retrieval:
             dummy = torch.zeros((len(queries), top_k, self.text_dim))
-            return dummy, [[""] * top_k for _ in queries]
+            return dummy, [[] for _ in queries]
         result = self.text_retriever.retrieve(queries, top_k)
         embeds = result.get("embeddings")
         if embeds is None:
@@ -234,9 +247,9 @@ class R3PlusPlus(nn.Module):
         return torch.from_numpy(embeds).float(), texts
 
     def _retrieve_images(self, images: List[Image.Image], top_k: int) -> Tuple[torch.Tensor, List[List[str]]]:
-        if self.image_retriever is None:
+        if self.image_retriever is None or not self.config.enable_image_retrieval:
             dummy = torch.zeros((len(images), top_k, self.image_dim))
-            return dummy, [[""] * top_k for _ in images]
+            return dummy, [[] for _ in images]
         result = self.image_retriever.retrieve(images, top_k)
         embeds = result.get("embeddings")
         if embeds is None:
@@ -265,9 +278,15 @@ class R3PlusPlus(nn.Module):
         corruption_level: float,
         top_k: int,
     ) -> Dict[str, Any]:
-        corr_images, corr_texts, c_vis, c_text = self.corruptor(
-            images, pseudo_texts, corruption_level
-        )
+        if self.config.enable_corruption:
+            corr_images, corr_texts, c_vis, c_text = self.corruptor(
+                images, pseudo_texts, corruption_level
+            )
+        else:
+            corr_images = images
+            corr_texts = pseudo_texts
+            c_vis = torch.ones(len(images), 1)
+            c_text = torch.ones(len(images), 1)
 
         queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
         text_embeds, retrieved_texts = self._retrieve_texts(queries, top_k)
@@ -278,22 +297,39 @@ class R3PlusPlus(nn.Module):
         c_vis = c_vis.to(self.qwen.device)
         c_text = c_text.to(self.qwen.device)
 
-        prefix = self.prefix_enhancer(text_embeds)
-        latent = self.latent_tokens(len(images), (c_vis + c_text) / 2)
-        mem_t, mem_i = self.memory_aligner(text_embeds, image_embeds)
-        mem_t = mem_t * c_text
-        mem_i = mem_i * c_vis
-        vis_feat = image_embeds.mean(dim=1)
-        gates = self.gate(mem_t, mem_i, vis_feat)
+        prefix_tokens: List[torch.Tensor] = []
+        if self.prefix_enhancer is not None:
+            prefix_tokens.append(self.prefix_enhancer(text_embeds))
+        if self.latent_tokens is not None:
+            prefix_tokens.append(self.latent_tokens(len(images), (c_vis + c_text) / 2))
 
-        prefix = torch.cat([prefix, latent], dim=1)
-        prefix = prefix * gates[:, 0:1].unsqueeze(-1)
+        if self.memory_aligner is not None:
+            mem_t, mem_i = self.memory_aligner(text_embeds, image_embeds)
+            mem_t = mem_t * c_text
+            mem_i = mem_i * c_vis
+        else:
+            mem_t = torch.zeros((len(images), self.config.hidden_dim), device=self.qwen.device)
+            mem_i = torch.zeros((len(images), self.config.hidden_dim), device=self.qwen.device)
 
-        contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
-        aug_pseudo_texts = [
-            f"{text} {ctx}".strip() if ctx else text
-            for text, ctx in zip(corr_texts, contexts)
-        ]
+        vis_feat = self.vis_proj(image_embeds.mean(dim=1))
+        if self.gate is not None:
+            gates = self.gate(mem_t, mem_i, vis_feat)
+        else:
+            gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+
+        prefix = None
+        if prefix_tokens:
+            prefix = torch.cat(prefix_tokens, dim=1)
+            prefix = prefix * gates[:, 0:1].unsqueeze(-1)
+
+        if self.config.enable_context:
+            contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
+            aug_pseudo_texts = [
+                f"{text} {ctx}".strip() if ctx else text
+                for text, ctx in zip(corr_texts, contexts)
+            ]
+        else:
+            aug_pseudo_texts = corr_texts
 
         outputs = self.qwen.forward_student(
             corr_images,
@@ -301,7 +337,7 @@ class R3PlusPlus(nn.Module):
             aug_pseudo_texts,
             answers,
             prefix_embeds=prefix,
-            use_soft_prefix=self.config.use_soft_prefix,
+            use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
         )
 
         return {
@@ -320,16 +356,25 @@ class R3PlusPlus(nn.Module):
         top_k: int,
         max_new_tokens: int,
     ) -> List[str]:
-        corr_images, corr_texts, _, _ = self.corruptor(images, pseudo_texts, corruption_level)
+        if self.config.enable_corruption:
+            corr_images, corr_texts, _, _ = self.corruptor(
+                images, pseudo_texts, corruption_level
+            )
+        else:
+            corr_images = images
+            corr_texts = pseudo_texts
         queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
         _, retrieved_texts = self._retrieve_texts(queries, top_k)
         _, retrieved_images = self._retrieve_images(corr_images, top_k)
         gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
-        contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
-        aug_pseudo_texts = [
-            f"{text} {ctx}".strip() if ctx else text
-            for text, ctx in zip(corr_texts, contexts)
-        ]
+        if self.config.enable_context:
+            contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
+            aug_pseudo_texts = [
+                f"{text} {ctx}".strip() if ctx else text
+                for text, ctx in zip(corr_texts, contexts)
+            ]
+        else:
+            aug_pseudo_texts = corr_texts
         return self.qwen.generate_answer(
             corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
         )

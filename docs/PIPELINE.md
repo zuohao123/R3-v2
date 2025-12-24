@@ -155,6 +155,73 @@ python scripts/eval_r3.py \
   --index_dir indices
 ```
 
+## 6b) Evaluate Base vs R3 (Clean + Corrupted)
+
+### Base model (clean, no pseudo-text)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices
+```
+
+### Base model (corruption sweep)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --corrupt_text_target pseudo_text \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices
+```
+
+### R3 model (clean)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices
+```
+
+### R3 model (corruption sweep)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices
+```
+
+### R3 ablation example (disable retrieval + prefix + gate)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_prefix \
+  --disable_gate \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices
+```
+
 ## Multi-GPU / Model-Parallel Notes (8x V100)
 
 - **Full-precision fine-tuning of Qwen3-VL-8B is likely to OOM on 32GB without sharding.**

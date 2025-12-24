@@ -66,6 +66,14 @@ class R3Config:
     latent_tokens: int = 4
     hidden_dim: int = 4096
     use_soft_prefix: bool = False
+    enable_corruption: bool = True
+    enable_text_retrieval: bool = True
+    enable_image_retrieval: bool = True
+    enable_prefix: bool = True
+    enable_memory: bool = True
+    enable_latent_tokens: bool = True
+    enable_gate: bool = True
+    enable_context: bool = True
     corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
 
 

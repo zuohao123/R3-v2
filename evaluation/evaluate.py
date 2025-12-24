@@ -6,7 +6,7 @@ import math
 import os
 import re
 from collections import Counter
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 
@@ -33,6 +33,28 @@ def f1_score(pred: str, ref: str) -> float:
     precision = num_same / len(pred_tokens)
     recall = num_same / len(ref_tokens)
     return 2 * precision * recall / (precision + recall)
+
+
+def _try_parse_float(text: str) -> Optional[float]:
+    cleaned = normalize_answer(text)
+    cleaned = cleaned.replace(",", "")
+    match = re.search(r"-?\\d+(?:\\.\\d+)?", cleaned)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def relaxed_accuracy(pred: str, ref: str, tol: float = 0.05) -> float:
+    """Relaxed accuracy for numeric answers, else exact match."""
+    pred_num = _try_parse_float(pred)
+    ref_num = _try_parse_float(ref)
+    if pred_num is not None and ref_num is not None:
+        denom = max(abs(ref_num), 1e-6)
+        return float(abs(pred_num - ref_num) / denom <= tol)
+    return exact_match(pred, ref)
 
 
 def _ngram_counts(tokens: List[str], n: int) -> Counter:
@@ -80,42 +102,137 @@ def rouge_l(pred: str, ref: str) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
+def _edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    dp = list(range(len(b) + 1))
+    for i, ch_a in enumerate(a, start=1):
+        prev = dp[0]
+        dp[0] = i
+        for j, ch_b in enumerate(b, start=1):
+            cur = dp[j]
+            if ch_a == ch_b:
+                dp[j] = prev
+            else:
+                dp[j] = 1 + min(prev, dp[j - 1], dp[j])
+            prev = cur
+    return dp[-1]
+
+
+def anls_score(pred: str, ref: str) -> float:
+    """ANLS metric used in TextVQA/InfoVQA."""
+    pred_norm = normalize_answer(pred)
+    ref_norm = normalize_answer(ref)
+    if not pred_norm or not ref_norm:
+        return float(pred_norm == ref_norm)
+    dist = _edit_distance(pred_norm, ref_norm)
+    denom = max(len(pred_norm), len(ref_norm), 1)
+    score = 1.0 - dist / denom
+    return score if score >= 0.5 else 0.0
+
+
+def _compute_metrics(pred: str, ref: str) -> Dict[str, float]:
+    return {
+        "exact_match": exact_match(pred, ref),
+        "f1": f1_score(pred, ref),
+        "bleu": bleu_score(pred, ref),
+        "rouge_l": rouge_l(pred, ref),
+        "anls": anls_score(pred, ref),
+        "relaxed_acc": relaxed_accuracy(pred, ref),
+    }
+
+
+def _apply_corruption(
+    corruptor,
+    images,
+    questions: List[str],
+    pseudo_texts: List[str],
+    level: float,
+    text_target: str,
+) -> Tuple[List, List[str], List[str]]:
+    if level <= 0.0 or corruptor is None:
+        return images, questions, pseudo_texts
+    if text_target == "question":
+        corr_images, corr_questions, _, _ = corruptor(images, questions, level)
+        return corr_images, corr_questions, pseudo_texts
+    if text_target == "pseudo_text":
+        corr_images, corr_pseudo, _, _ = corruptor(images, pseudo_texts, level)
+        return corr_images, questions, corr_pseudo
+    corr_images, _, _, _ = corruptor(images, [""] * len(images), level)
+    return corr_images, questions, pseudo_texts
+
+
 def evaluate_model(
-    r3,
+    model,
     dataloader,
     corruption_levels: List[float],
     max_new_tokens: int,
     top_k: int,
     return_sums: bool = False,
+    mode: str = "r3",
+    use_pseudo_text: Optional[bool] = None,
+    corrupt_text_target: str = "pseudo_text",
+    corruptor=None,
 ) -> Dict[float, Dict[str, float]]:
     results: Dict[float, Dict[str, float]] = {}
-    r3.eval()
-    if hasattr(r3, "qwen") and hasattr(r3.qwen, "model"):
-        r3.qwen.model.eval()
+    if mode not in {"r3", "base"}:
+        raise ValueError(f"Unknown mode: {mode}")
+    if use_pseudo_text is None:
+        use_pseudo_text = mode == "r3"
+
+    if hasattr(model, "eval"):
+        model.eval()
+    if hasattr(model, "qwen") and hasattr(model.qwen, "model"):
+        model.qwen.model.eval()
+    if (
+        mode == "base"
+        and corruptor is None
+        and any(level > 0 for level in corruption_levels)
+    ):
+        from config.train_config import R3Config
+        from models.r3_modules import CorruptionSimulator
+
+        corruptor = CorruptionSimulator(R3Config())
+
     for level in corruption_levels:
         sums = Counter()
         count = 0
         for batch in dataloader:
             clean = batch["clean"]
             corrupted = batch["corrupted"]
-            preds = r3.generate(
-                corrupted["images"],
-                corrupted["questions"],
-                corrupted["pseudo_texts"],
-                corruption_level=level,
-                top_k=top_k,
-                max_new_tokens=max_new_tokens,
-            )
+            images = corrupted["images"]
+            questions = corrupted["questions"]
+            pseudo_texts = corrupted["pseudo_texts"]
+
+            if mode == "r3":
+                if not use_pseudo_text:
+                    pseudo_texts = ["" for _ in questions]
+                preds = model.generate(
+                    images,
+                    questions,
+                    pseudo_texts,
+                    corruption_level=level,
+                    top_k=top_k,
+                    max_new_tokens=max_new_tokens,
+                )
+            else:
+                images, questions, pseudo_texts = _apply_corruption(
+                    corruptor, images, questions, pseudo_texts, level, corrupt_text_target
+                )
+                preds = model.generate_answer(
+                    images,
+                    questions,
+                    pseudo_texts if use_pseudo_text else None,
+                    max_new_tokens=max_new_tokens,
+                )
+
             refs = clean["answers"]
             for pred, ref in zip(preds, refs):
-                sums.update(
-                    {
-                        "exact_match": exact_match(pred, ref),
-                        "f1": f1_score(pred, ref),
-                        "bleu": bleu_score(pred, ref),
-                        "rouge_l": rouge_l(pred, ref),
-                    }
-                )
+                sums.update(_compute_metrics(pred, ref))
                 count += 1
         if return_sums:
             results[level] = {"count": float(count), **sums}

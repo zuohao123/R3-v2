@@ -43,6 +43,14 @@ def main() -> None:
         default="full",
     )
     parser.add_argument("--disable_teacher", action="store_true")
+    parser.add_argument("--disable_corruption", action="store_true")
+    parser.add_argument("--disable_text_retrieval", action="store_true")
+    parser.add_argument("--disable_image_retrieval", action="store_true")
+    parser.add_argument("--disable_prefix", action="store_true")
+    parser.add_argument("--disable_memory", action="store_true")
+    parser.add_argument("--disable_latent_tokens", action="store_true")
+    parser.add_argument("--disable_gate", action="store_true")
+    parser.add_argument("--disable_context", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -80,6 +88,14 @@ def main() -> None:
     cfg.training.fsdp_cpu_offload = args.fsdp_cpu_offload
     cfg.training.fsdp_sharding = args.fsdp_sharding
     cfg.training.use_teacher = not args.disable_teacher
+    cfg.r3.enable_corruption = not args.disable_corruption
+    cfg.r3.enable_text_retrieval = not args.disable_text_retrieval
+    cfg.r3.enable_image_retrieval = not args.disable_image_retrieval
+    cfg.r3.enable_prefix = not args.disable_prefix
+    cfg.r3.enable_memory = not args.disable_memory
+    cfg.r3.enable_latent_tokens = not args.disable_latent_tokens
+    cfg.r3.enable_gate = not args.disable_gate
+    cfg.r3.enable_context = not args.disable_context
 
     trainer = Trainer(cfg)
     trainer.train()
