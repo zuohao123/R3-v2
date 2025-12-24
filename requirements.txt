@@ -1,0 +1,20 @@
+# Core
+numpy>=1.23
+pillow>=10.0.0
+
+# PyTorch + distributed training
+torch>=2.1.0
+torchvision>=0.16.0
+
+# HF + datasets
+transformers>=4.40.0
+datasets>=2.16.0
+sentence-transformers>=2.2.2
+peft>=0.10.0
+
+# Retrieval
+faiss-gpu>=1.7.4; platform_system == "Linux"
+faiss-cpu>=1.7.4; platform_system != "Linux"
+
+# DeepSpeed (ZeRO-3)
+deepspeed>=0.12.0

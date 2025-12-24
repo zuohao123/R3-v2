@@ -1,0 +1,23 @@
+{
+  "zero_optimization": {
+    "stage": 3,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "contiguous_gradients": true,
+    "stage3_param_persistence_threshold": 100000
+  },
+  "gradient_clipping": 1.0,
+  "fp16": {
+    "enabled": false
+  },
+  "bf16": {
+    "enabled": true
+  },
+  "optimizer": {
+    "type": "AdamW",
+    "params": {
+      "lr": 1e-5,
+      "weight_decay": 0.01
+    }
+  }
+}
