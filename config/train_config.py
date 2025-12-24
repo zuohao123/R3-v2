@@ -42,7 +42,7 @@ class RetrievalConfig:
     text_index_path: str = "indices/text.index"
     text_meta_path: str = "indices/text.meta.json"
     text_embeds_path: str = "indices/text.embeds.npy"
-    image_encoder_name: str = "models/clip-vit-base-patch32"
+    image_encoder_name: str = "models/clip-vit-b32-laion2B"
     text_encoder_name: str = "models/all-MiniLM-L6-v2"
     top_k: int = 5
     use_retrieval: bool = True

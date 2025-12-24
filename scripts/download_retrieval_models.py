@@ -25,7 +25,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download retrieval models.")
     parser.add_argument("--out_dir", default="models", help="Local models directory")
     parser.add_argument(
-        "--clip_model", default="openai/clip-vit-base-patch32", help="CLIP repo id"
+        "--clip_model", default="laion/CLIP-ViT-B-32-laion2B-s34B-b79K", help="CLIP repo id"
     )
     parser.add_argument(
         "--text_model",
@@ -37,7 +37,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     os.makedirs(args.out_dir, exist_ok=True)
 
-    _download(args.clip_model, args.out_dir, "clip-vit-base-patch32")
+    _download(args.clip_model, args.out_dir, "clip-vit-b32-laion2B")
     _download(args.text_model, args.out_dir, "all-MiniLM-L6-v2")
 
 

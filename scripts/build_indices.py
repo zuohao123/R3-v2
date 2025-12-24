@@ -177,7 +177,7 @@ def main() -> None:
     parser.add_argument("--jsonl", nargs="+", required=False, help="Unified JSONL paths")
     parser.add_argument("--image_root", default="", help="Optional image root")
     parser.add_argument("--out_dir", default="indices", help="Output directory for indices")
-    parser.add_argument("--image_encoder", default="openai/clip-vit-base-patch32")
+    parser.add_argument("--image_encoder", default="models/clip-vit-b32-laion2B")
     parser.add_argument("--text_encoder", default="sentence-transformers/all-MiniLM-L6-v2")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_shards", type=int, default=1)
