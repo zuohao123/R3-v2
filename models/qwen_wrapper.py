@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+import inspect
 from typing import Any, Dict, List, Optional
 
 import torch
@@ -32,6 +33,7 @@ class QwenVLWrapper:
     """Thin wrapper around Qwen3-VL for training and generation."""
 
     def __init__(self, config: QwenVLConfig) -> None:
+        self._patch_torch_autocast()
         self.config = config
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self.processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
@@ -74,6 +76,21 @@ class QwenVLWrapper:
         )
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.print_trainable_parameters()
+
+    @staticmethod
+    def _patch_torch_autocast() -> None:
+        """Shim torch.is_autocast_enabled for older torch versions."""
+        try:
+            sig = inspect.signature(torch.is_autocast_enabled)
+        except (TypeError, ValueError):
+            return
+        if len(sig.parameters) == 0:
+            orig = torch.is_autocast_enabled
+
+            def _is_autocast_enabled(*args, **kwargs):
+                return orig()
+
+            torch.is_autocast_enabled = _is_autocast_enabled  # type: ignore[assignment]
 
     def _load_model(self, model_name: str, dtype: torch.dtype) -> torch.nn.Module:
         load_errors = []
