@@ -113,6 +113,7 @@ class TrainingConfig:
     sample_every: int = 0
     sample_num: int = 1
     sample_max_new_tokens: int = 32
+    gradient_checkpointing: bool = False
     distributed_backend: str = "none"  # "none", "fsdp", "deepspeed"
     deepspeed_config: Optional[str] = None
     fsdp_min_num_params: int = 100_000_000

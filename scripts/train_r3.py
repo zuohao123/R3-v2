@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--sample_every", type=int, default=0)
     parser.add_argument("--sample_num", type=int, default=1)
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
+    parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument(
         "--sampling_alpha",
         type=float,
@@ -88,6 +89,7 @@ def main() -> None:
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
+    cfg.training.gradient_checkpointing = args.gradient_checkpointing
     cfg.training.sampling_alpha = args.sampling_alpha
     cfg.model.use_lora = args.use_lora
     cfg.training.bf16 = args.bf16 or cfg.training.bf16

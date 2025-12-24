@@ -134,6 +134,13 @@ class Trainer:
             lora_target_modules=config.model.lora_target_modules,
         )
         self.qwen = QwenVLWrapper(qwen_cfg)
+        if self.config.training.gradient_checkpointing:
+            if hasattr(self.qwen.model, "gradient_checkpointing_enable"):
+                self.qwen.model.gradient_checkpointing_enable()
+                if hasattr(self.qwen.model, "enable_input_require_grads"):
+                    self.qwen.model.enable_input_require_grads()
+                if self.is_main_process:
+                    logging.info("Enabled gradient checkpointing.")
 
         self.text_retriever: Optional[TextRetriever] = None
         self.image_retriever: Optional[ImageRetriever] = None
