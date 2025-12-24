@@ -27,8 +27,17 @@ class ImageRetriever:
             return
         from transformers import CLIPModel, CLIPProcessor
 
-        self.model = CLIPModel.from_pretrained(self.model_name)
-        self.processor = CLIPProcessor.from_pretrained(self.model_name)
+        is_local = os.path.isdir(self.model_name)
+        model_kwargs: Dict[str, Any] = {}
+        processor_kwargs: Dict[str, Any] = {}
+        if is_local:
+            safetensors_path = os.path.join(self.model_name, "model.safetensors")
+            model_kwargs["local_files_only"] = True
+            model_kwargs["use_safetensors"] = os.path.exists(safetensors_path)
+            processor_kwargs["local_files_only"] = True
+
+        self.model = CLIPModel.from_pretrained(self.model_name, **model_kwargs)
+        self.processor = CLIPProcessor.from_pretrained(self.model_name, **processor_kwargs)
         self.model.to(self.device)
         self.model.eval()
 
