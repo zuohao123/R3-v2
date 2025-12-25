@@ -34,6 +34,7 @@ def main() -> None:
     parser.add_argument("--max_grad_norm", type=float, default=None)
     parser.add_argument("--min_label_ratio", type=float, default=None)
     parser.add_argument("--max_length", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--sample_every", type=int, default=0)
     parser.add_argument("--sample_num", type=int, default=1)
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
@@ -103,6 +104,8 @@ def main() -> None:
         cfg.training.min_label_ratio = args.min_label_ratio
     if args.max_length is not None:
         cfg.data.max_length = args.max_length
+    if args.num_workers is not None:
+        cfg.data.num_workers = args.num_workers
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens

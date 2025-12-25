@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("--index_dir", default="indices")
     parser.add_argument("--out_json", default="eval_results.json")
     parser.add_argument("--max_length", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--top_k", type=int, default=3)
     parser.add_argument(
         "--eval_mode",
@@ -91,6 +92,8 @@ def main() -> None:
     cfg.data.image_root = args.image_root
     if args.max_length is not None:
         cfg.data.max_length = args.max_length
+    if args.num_workers is not None:
+        cfg.data.num_workers = args.num_workers
     cfg.retrieval.index_dir = args.index_dir
     cfg.retrieval.image_index_path = f"{args.index_dir}/image.index"
     cfg.retrieval.image_meta_path = f"{args.index_dir}/image.meta.json"
