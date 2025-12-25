@@ -113,6 +113,7 @@ class TrainingConfig:
     seed: int = 42
     bf16: bool = True
     fp16: bool = False
+    loss_scale: float = 256.0
     sampling_alpha: Optional[float] = None
     sample_every: int = 0
     sample_num: int = 1

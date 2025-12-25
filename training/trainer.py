@@ -204,9 +204,9 @@ class Trainer:
             self.scaler = None
         else:
             if config.training.fp16 and self.distributed:
-                self.scaler = ShardedGradScaler()
+                self.scaler = ShardedGradScaler(init_scale=config.training.loss_scale)
             elif config.training.fp16:
-                self.scaler = torch.cuda.amp.GradScaler()
+                self.scaler = torch.cuda.amp.GradScaler(init_scale=config.training.loss_scale)
             else:
                 self.scaler = None
 
@@ -685,6 +685,30 @@ class Trainer:
                             self._clip_gradients()
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
+                            scale = self.scaler.get_scale()
+                            if self.distributed:
+                                scale_flag = torch.tensor(
+                                    1 if scale < 1 else 0,
+                                    device=self.device,
+                                    dtype=torch.int,
+                                )
+                                dist.all_reduce(scale_flag, op=dist.ReduceOp.MAX)
+                                if scale_flag.item() > 0:
+                                    scale = 0.0
+                            if scale < 1:
+                                if self.is_main_process:
+                                    logging.warning(
+                                        "Grad scaler scale dropped to %.3e; resetting.",
+                                        scale,
+                                    )
+                                if self.distributed:
+                                    self.scaler = ShardedGradScaler(
+                                        init_scale=self.config.training.loss_scale
+                                    )
+                                else:
+                                    self.scaler = torch.cuda.amp.GradScaler(
+                                        init_scale=self.config.training.loss_scale
+                                    )
                         else:
                             assert self.optimizer is not None
                             self._clip_gradients()
