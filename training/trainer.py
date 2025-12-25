@@ -574,11 +574,14 @@ class Trainer:
 
     def _log_samples(self, batch: Dict[str, Any], corruption_level: float, step: int) -> None:
         sample_every = self.config.training.sample_every
-        if sample_every <= 0 or not self.is_main_process:
+        if sample_every <= 0:
             return
-        if self.config.training.distributed_backend in {"deepspeed", "fsdp"}:
+        if self.config.training.distributed_backend == "deepspeed":
             if step == 0 and self.is_main_process:
-                logging.warning("Sample logging is disabled under %s.", self.config.training.distributed_backend)
+                logging.warning(
+                    "Sample logging is disabled under %s.",
+                    self.config.training.distributed_backend,
+                )
             return
         if step % sample_every != 0:
             return
@@ -589,6 +592,7 @@ class Trainer:
         if n <= 0:
             return
         images = corrupted["images"][:n]
+        image_paths = corrupted.get("image_paths", [""] * n)[:n]
         questions = corrupted["questions"][:n]
         pseudo_texts = corrupted["pseudo_texts"][:n]
         answers = clean["answers"][:n]
@@ -605,22 +609,33 @@ class Trainer:
                 max_new_tokens=self.config.training.sample_max_new_tokens,
                 return_retrieval=True,
             )
-        preds, retrieved_texts, _, contexts = outputs
+        preds, retrieved_texts, retrieved_image_paths, contexts = outputs
         self.qwen.model.train()
         self.r3.train()
 
-        logging.info("Sample outputs at step %d (corruption=%.2f):", step, corruption_level)
-        for idx in range(n):
-            logging.info("  Q: %s", self._truncate(questions[idx]))
-            logging.info("  GT: %s", self._truncate(answers[idx]))
-            logging.info("  Pred: %s", self._truncate(preds[idx]))
-            if contexts[idx]:
-                logging.info("  Context: %s", self._truncate(contexts[idx]))
-            if retrieved_texts[idx]:
-                shown = retrieved_texts[idx][: min(3, len(retrieved_texts[idx]))]
-                joined = " || ".join(self._truncate(t) for t in shown if t)
-                if joined:
-                    logging.info("  Retrieved: %s", joined)
+        if self.is_main_process:
+            logging.info(
+                "Sample outputs at step %d (corruption=%.2f):",
+                step,
+                corruption_level,
+            )
+            for idx in range(n):
+                logging.info("  Image: %s", image_paths[idx])
+                logging.info("  Q: %s", self._truncate(questions[idx]))
+                logging.info("  GT: %s", self._truncate(answers[idx]))
+                logging.info("  Pred: %s", self._truncate(preds[idx]))
+                if contexts[idx]:
+                    logging.info("  Context: %s", self._truncate(contexts[idx]))
+                if retrieved_texts[idx]:
+                    shown = retrieved_texts[idx][: min(3, len(retrieved_texts[idx]))]
+                    joined = " || ".join(self._truncate(t) for t in shown if t)
+                    if joined:
+                        logging.info("  Retrieved text: %s", joined)
+                if retrieved_image_paths[idx]:
+                    shown_imgs = retrieved_image_paths[idx][: min(3, len(retrieved_image_paths[idx]))]
+                    joined_imgs = " || ".join(self._truncate(p) for p in shown_imgs if p)
+                    if joined_imgs:
+                        logging.info("  Retrieved images: %s", joined_imgs)
 
     def train(self) -> None:
         total_steps = self.config.training.max_steps

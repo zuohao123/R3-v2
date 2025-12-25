@@ -253,10 +253,12 @@ class R3(nn.Module):
         texts = [[meta.get("pseudo_text", "") for meta in row] for row in result["metadata"]]
         return torch.from_numpy(embeds).float(), texts
 
-    def _retrieve_images(self, images: List[Image.Image], top_k: int) -> Tuple[torch.Tensor, List[List[str]]]:
+    def _retrieve_images(
+        self, images: List[Image.Image], top_k: int
+    ) -> Tuple[torch.Tensor, List[List[str]], List[List[str]]]:
         if self.image_retriever is None or not self.config.enable_image_retrieval:
             dummy = torch.zeros((len(images), top_k, self.image_dim))
-            return dummy, [[] for _ in images]
+            return dummy, [[] for _ in images], [[] for _ in images]
         result = self.image_retriever.retrieve(images, top_k)
         embeds = result.get("embeddings")
         if embeds is None:
@@ -274,7 +276,10 @@ class R3(nn.Module):
         texts = [
             [meta.get("pseudo_text", "") for meta in row] for row in result["metadata"]
         ]
-        return torch.from_numpy(embeds).float(), texts
+        paths = [
+            [meta.get("image_path", "") for meta in row] for row in result["metadata"]
+        ]
+        return torch.from_numpy(embeds).float(), texts, paths
 
     def forward_student(
         self,
@@ -304,7 +309,9 @@ class R3(nn.Module):
 
             queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
             text_embeds, retrieved_texts = self._retrieve_texts(queries, top_k)
-            image_embeds, retrieved_images = self._retrieve_images(corr_images, top_k)
+            image_embeds, retrieved_images, retrieved_image_paths = self._retrieve_images(
+                corr_images, top_k
+            )
 
             text_embeds = text_embeds.to(self.qwen.device, dtype=torch.float32)
             image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)
@@ -354,7 +361,9 @@ class R3(nn.Module):
                 prefix = prefix * gates[:, 0:1].unsqueeze(-1)
 
             if self.config.enable_context:
-                contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
+                contexts = self._compose_context(
+                    retrieved_texts, retrieved_images, gates, top_k
+                )
                 aug_pseudo_texts = [
                     f"{text} {ctx}".strip() if ctx else text
                     for text, ctx in zip(corr_texts, contexts)
@@ -382,6 +391,8 @@ class R3(nn.Module):
             "gates": gates.detach(),
             "c_vis": c_vis.detach(),
             "c_text": c_text.detach(),
+            "retrieved_texts": retrieved_texts,
+            "retrieved_image_paths": retrieved_image_paths,
         }
 
     def generate(
@@ -403,10 +414,14 @@ class R3(nn.Module):
             corr_texts = pseudo_texts
         queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
         _, retrieved_texts = self._retrieve_texts(queries, top_k)
-        _, retrieved_images = self._retrieve_images(corr_images, top_k)
+        _, retrieved_images, retrieved_image_paths = self._retrieve_images(
+            corr_images, top_k
+        )
         gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
         if self.config.enable_context:
-            contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
+            contexts = self._compose_context(
+                retrieved_texts, retrieved_images, gates, top_k
+            )
             aug_pseudo_texts = [
                 f"{text} {ctx}".strip() if ctx else text
                 for text, ctx in zip(corr_texts, contexts)
@@ -422,5 +437,5 @@ class R3(nn.Module):
             corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
         )
         if return_retrieval:
-            return answers, retrieved_texts, retrieved_images, contexts
+            return answers, retrieved_texts, retrieved_image_paths, contexts
         return answers

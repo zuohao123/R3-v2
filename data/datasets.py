@@ -95,6 +95,7 @@ class UnifiedQACollator:
 
     def __call__(self, batch: List[UnifiedQADatum]) -> Dict[str, Any]:
         images = [self._load_image(item.image_path) for item in batch]
+        image_paths = [item.image_path for item in batch]
         questions = [item.question for item in batch]
         answers = [item.answer for item in batch]
         pseudo_texts = [item.pseudo_text for item in batch]
@@ -105,12 +106,14 @@ class UnifiedQACollator:
         return {
             "clean": {
                 "images": images,
+                "image_paths": image_paths,
                 "questions": questions,
                 "answers": answers,
                 "tokenized_questions": tokenized_questions,
             },
             "corrupted": {
                 "images": images,
+                "image_paths": image_paths,
                 "questions": questions,
                 "pseudo_texts": pseudo_texts,
                 "tokenized_pseudo_texts": tokenized_pseudo,
