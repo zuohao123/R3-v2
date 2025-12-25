@@ -15,9 +15,8 @@ class ModelConfig:
     lora_r: int = 16
     lora_alpha: int = 8
     lora_dropout: float = 0.05
-    lora_target_modules: List[str] = field(
-        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
-    )
+    # Default to V/O only for stability on FP16; override via CLI for Q/K ablations.
+    lora_target_modules: List[str] = field(default_factory=lambda: ["v_proj", "o_proj"])
 
 
 @dataclass
@@ -102,6 +101,7 @@ class TrainingConfig:
     num_epochs: int = 1
     learning_rate: float = 1e-5
     weight_decay: float = 0.01
+    adam_eps: float = 1e-6
     max_grad_norm: float = 1.0
     min_label_ratio: float = 0.0
     gradient_accumulation: int = 1

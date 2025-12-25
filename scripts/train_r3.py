@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--learning_rate", type=float, default=1e-5)
+    parser.add_argument("--adam_eps", type=float, default=None)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--log_every", type=int, default=50)
     parser.add_argument("--max_grad_norm", type=float, default=None)
@@ -101,6 +102,8 @@ def main() -> None:
     cfg.training.num_epochs = args.num_epochs
     cfg.training.max_steps = args.max_steps
     cfg.training.learning_rate = args.learning_rate
+    if args.adam_eps is not None:
+        cfg.training.adam_eps = args.adam_eps
     cfg.training.gradient_accumulation = args.grad_accum
     cfg.training.log_every = args.log_every
     if args.max_grad_norm is not None:

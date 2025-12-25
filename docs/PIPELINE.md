@@ -120,7 +120,9 @@ python scripts/train_r3.py \
   --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
+  --adam_eps 1e-6 \
   --use_lora \
+  --lora_targets v_proj,o_proj \
   --disable_teacher \
   --gradient_checkpointing
 ```
@@ -143,7 +145,9 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --sampling_alpha 0.5 \
   --grad_accum 4 \
   --fsdp_min_params 10000000 \
+  --adam_eps 1e-6 \
   --use_lora \
+  --lora_targets v_proj,o_proj \
   --disable_teacher \
   --gradient_checkpointing
 ```
@@ -166,7 +170,9 @@ deepspeed --num_gpus=8 scripts/train_r3.py \
   --batch_size 1 \
   --sampling_alpha 0.5 \
   --grad_accum 4 \
+  --adam_eps 1e-6 \
   --use_lora \
+  --lora_targets v_proj,o_proj \
   --disable_teacher \
   --gradient_checkpointing
 ```

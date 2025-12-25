@@ -219,6 +219,7 @@ class Trainer:
                 param_groups,
                 lr=base_lr,
                 weight_decay=config.training.weight_decay,
+                eps=config.training.adam_eps,
             )
         else:
             self.optimizer = None
