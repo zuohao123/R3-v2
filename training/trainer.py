@@ -136,10 +136,17 @@ class Trainer:
         self.qwen = QwenVLWrapper(qwen_cfg)
         if self.config.training.gradient_checkpointing:
             if hasattr(self.qwen.model, "gradient_checkpointing_enable"):
-                self.qwen.model.gradient_checkpointing_enable()
-                self.qwen.enable_input_require_grads()
-                if self.is_main_process:
-                    logging.info("Enabled gradient checkpointing.")
+                try:
+                    self.qwen.model.gradient_checkpointing_enable(
+                        gradient_checkpointing_kwargs={"use_reentrant": False}
+                    )
+                except TypeError:
+                    self.qwen.model.gradient_checkpointing_enable()
+            if hasattr(self.qwen.model, "config"):
+                self.qwen.model.config.use_cache = False
+            self.qwen.enable_input_require_grads()
+            if self.is_main_process:
+                logging.info("Enabled gradient checkpointing.")
 
         self.text_retriever: Optional[TextRetriever] = None
         self.image_retriever: Optional[ImageRetriever] = None
