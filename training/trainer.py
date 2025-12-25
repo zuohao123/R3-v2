@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import time
 from typing import Any, Dict, Optional
 
 import torch
@@ -17,10 +18,15 @@ from torch.distributed.fsdp import (
     ShardingStrategy,
     StateDictType,
 )
+from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
 from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
 from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 import functools
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional progress bar
+    tqdm = None
 
 from config.train_config import TrainConfig
 from data.datasets import UnifiedQACollator, UnifiedQADataset
@@ -194,11 +200,12 @@ class Trainer:
         if self.config.training.distributed_backend == "deepspeed":
             self.scaler = None
         else:
-            self.scaler = (
-                torch.cuda.amp.GradScaler()
-                if config.training.fp16 and not self.distributed
-                else None
-            )
+            if config.training.fp16 and self.distributed:
+                self.scaler = ShardedGradScaler()
+            elif config.training.fp16:
+                self.scaler = torch.cuda.amp.GradScaler()
+            else:
+                self.scaler = None
 
         self.train_sampler = None
         self.val_sampler = None
@@ -522,7 +529,20 @@ class Trainer:
 
     def train(self) -> None:
         total_steps = self.config.training.max_steps
+        if total_steps is None:
+            try:
+                total_steps = len(self.train_loader) * self.config.training.num_epochs
+            except TypeError:
+                total_steps = None
         global_step = 0
+        start_time = time.time()
+        pbar = None
+        if self.is_main_process and tqdm is not None:
+            pbar = tqdm(
+                total=total_steps,
+                desc="train",
+                dynamic_ncols=True,
+            )
         if self.engine is not None:
             self.engine.train()
         else:
@@ -532,13 +552,17 @@ class Trainer:
             if self.train_sampler is not None:
                 if hasattr(self.train_sampler, "set_epoch"):
                     self.train_sampler.set_epoch(epoch)
-            for batch in self.train_loader:
+            for step_in_epoch, batch in enumerate(self.train_loader):
                 if total_steps is not None and global_step >= total_steps:
+                    if pbar is not None:
+                        pbar.close()
                     return
 
                 corruption_level = self.curriculum.get_level(global_step)
                 clean = batch["clean"]
                 corrupted = batch["corrupted"]
+                if any(not ans for ans in clean["answers"]):
+                    clean["answers"] = [ans if ans else "unknown" for ans in clean["answers"]]
 
                 teacher_outputs = None
                 if self.config.training.use_teacher:
@@ -589,6 +613,16 @@ class Trainer:
                         )
                         loss = losses["total"] / self.config.training.gradient_accumulation
 
+                    if not torch.isfinite(losses["total"]):
+                        if self.is_main_process:
+                            logging.warning("Non-finite loss at step %d; skipping update.", global_step)
+                        if self.optimizer is not None:
+                            self.optimizer.zero_grad(set_to_none=True)
+                        global_step += 1
+                        if pbar is not None:
+                            pbar.update(1)
+                        continue
+
                     if self.scaler:
                         self.scaler.scale(loss).backward()
                     else:
@@ -605,14 +639,49 @@ class Trainer:
                         self.optimizer.zero_grad(set_to_none=True)
 
                 if global_step % self.config.training.log_every == 0 and self.is_main_process:
+                    lr = None
+                    if self.optimizer is not None and self.optimizer.param_groups:
+                        lr = self.optimizer.param_groups[0].get("lr")
+                    scale = self.scaler.get_scale() if self.scaler is not None else None
+                    gate_stats = None
+                    conf_stats = None
+                    if self.config.training.distributed_backend != "deepspeed":
+                        if isinstance(student_bundle, dict) and "gates" in student_bundle:
+                            gates = student_bundle["gates"].mean(dim=0).tolist()
+                            gate_stats = tuple(round(g, 3) for g in gates)
+                        if isinstance(student_bundle, dict) and "c_vis" in student_bundle:
+                            c_vis = student_bundle["c_vis"].mean().item()
+                            c_text = student_bundle["c_text"].mean().item()
+                            conf_stats = (round(c_vis, 3), round(c_text, 3))
+                    elapsed = time.time() - start_time
+                    eta = None
+                    if total_steps is not None and global_step > 0:
+                        rate = elapsed / global_step
+                        eta = rate * max(total_steps - global_step, 0)
                     logging.info(
-                        "step %d | loss %.4f ce %.4f cons %.4f | corruption %.2f",
+                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | eta %s",
+                        epoch,
                         global_step,
                         losses["total"].item(),
                         losses["ce"].item(),
                         losses["consistency"].item(),
                         corruption_level,
+                        f"{lr:.2e}" if lr is not None else "n/a",
+                        f"{scale:.1f}" if scale is not None else "n/a",
+                        gate_stats if gate_stats is not None else "n/a",
+                        conf_stats if conf_stats is not None else "n/a",
+                        f"{eta/60:.1f}m" if eta is not None else "n/a",
                     )
+
+                if pbar is not None:
+                    postfix = {
+                        "loss": f"{losses['total'].item():.3f}",
+                        "corr": f"{corruption_level:.2f}",
+                    }
+                    if self.optimizer is not None and self.optimizer.param_groups:
+                        postfix["lr"] = f"{self.optimizer.param_groups[0].get('lr'):.1e}"
+                    pbar.set_postfix(postfix)
+                    pbar.update(1)
 
                 self._log_samples(batch, corruption_level, global_step)
 
@@ -629,6 +698,9 @@ class Trainer:
                     self._save_checkpoint(global_step)
 
                 global_step += 1
+
+        if pbar is not None:
+            pbar.close()
 
     def evaluate(self) -> None:
         from evaluation.evaluate import evaluate_model
