@@ -13,7 +13,7 @@ class ModelConfig:
     device: str = "cuda"
     use_lora: bool = False
     lora_r: int = 16
-    lora_alpha: int = 32
+    lora_alpha: int = 8
     lora_dropout: float = 0.05
     lora_target_modules: List[str] = field(
         default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
@@ -115,7 +115,9 @@ class TrainingConfig:
     fp16: bool = False
     loss_scale: float = 256.0
     disable_grad_scaler: bool = False
-    skip_nonfinite_grads: bool = False
+    skip_nonfinite_grads: bool = True
+    lora_lr_mult: float = 0.1
+    r3_lr_mult: float = 1.0
     sampling_alpha: Optional[float] = None
     sample_every: int = 0
     sample_num: int = 1

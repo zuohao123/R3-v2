@@ -195,10 +195,29 @@ class Trainer:
         )
 
         if self.config.training.distributed_backend != "deepspeed":
+            base_lr = config.training.learning_rate
+            lora_lr = base_lr * config.training.lora_lr_mult
+            r3_lr = base_lr * config.training.r3_lr_mult
+            lora_params = []
+            qwen_params = []
+            for name, param in self.qwen.model.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "lora_" in name:
+                    lora_params.append(param)
+                else:
+                    qwen_params.append(param)
+            r3_params = [p for p in self.r3.parameters() if p.requires_grad]
+            param_groups = []
+            if lora_params:
+                param_groups.append({"params": lora_params, "lr": lora_lr})
+            if qwen_params:
+                param_groups.append({"params": qwen_params, "lr": base_lr})
+            if r3_params:
+                param_groups.append({"params": r3_params, "lr": r3_lr})
             self.optimizer = torch.optim.AdamW(
-                [p for p in self.qwen.model.parameters() if p.requires_grad]
-                + [p for p in self.r3.parameters() if p.requires_grad],
-                lr=config.training.learning_rate,
+                param_groups,
+                lr=base_lr,
                 weight_decay=config.training.weight_decay,
             )
         else:
