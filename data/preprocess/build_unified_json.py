@@ -54,13 +54,16 @@ def _ensure_text(value: Any, fallback: str) -> str:
 def _normalize_answer(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
+    print(f"1value: {value}")
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text", "full_answer", "ground_truth"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
+    print(f"2value: {value}")
     if isinstance(value, list):
         value = value[0] if value else fallback
+    print(f"3value: {value}")
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text", "full_answer", "ground_truth"):
             if key in value and value[key] not in (None, ""):
@@ -68,6 +71,7 @@ def _normalize_answer(value: Any, fallback: str) -> str:
                 break
         if isinstance(value, list):
             value = value[0] if value else fallback
+    print(f"4value: {value}")
     text = str(value).strip()
     return text if text else fallback
 
@@ -260,7 +264,9 @@ def build_screenqa_unified(
     missing_train = 0
     for idx, raw in enumerate(train_records):
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
+        print(f"raw:{raw}")
         answer = _extract_answer(raw, "")
+        print(f"answer:{answer}")
         if debug_samples > 0 and idx < debug_samples:
             dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
             logging.info(
