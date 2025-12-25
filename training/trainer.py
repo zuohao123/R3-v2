@@ -194,7 +194,11 @@ class Trainer:
         if self.config.training.distributed_backend == "deepspeed":
             self.scaler = None
         else:
-            self.scaler = torch.cuda.amp.GradScaler() if config.training.fp16 else None
+            self.scaler = (
+                torch.cuda.amp.GradScaler()
+                if config.training.fp16 and not self.distributed
+                else None
+            )
 
         self.train_sampler = None
         self.val_sampler = None
