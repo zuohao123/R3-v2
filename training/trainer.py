@@ -609,7 +609,7 @@ class Trainer:
                 max_new_tokens=self.config.training.sample_max_new_tokens,
                 return_retrieval=True,
             )
-        preds, retrieved_texts, retrieved_image_paths, contexts = outputs
+        preds, retrieved_texts, retrieved_image_paths, contexts, prompts = outputs
         self.qwen.model.train()
         self.r3.train()
 
@@ -636,6 +636,8 @@ class Trainer:
                     joined_imgs = " || ".join(self._truncate(p) for p in shown_imgs if p)
                     if joined_imgs:
                         logging.info("  RETRIEVAL images: %s", joined_imgs)
+                if prompts[idx]:
+                    logging.info("  MODEL input_text: %s", self._truncate(prompts[idx], 600))
                 logging.info("  MODEL pred: %s", self._truncate(preds[idx]))
 
     def train(self) -> None:

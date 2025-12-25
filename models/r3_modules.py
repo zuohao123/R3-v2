@@ -433,9 +433,16 @@ class R3(nn.Module):
             aug_pseudo_texts = [
                 text[: self.config.max_context_chars] for text in aug_pseudo_texts
             ]
+        if return_retrieval:
+            answers, prompts = self.qwen.generate_answer(
+                corr_images,
+                questions,
+                aug_pseudo_texts,
+                max_new_tokens=max_new_tokens,
+                return_prompts=True,
+            )
+            return answers, retrieved_texts, retrieved_image_paths, contexts, prompts
         answers = self.qwen.generate_answer(
             corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
         )
-        if return_retrieval:
-            return answers, retrieved_texts, retrieved_image_paths, contexts
         return answers

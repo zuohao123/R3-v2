@@ -410,7 +410,8 @@ class QwenVLWrapper:
         questions: List[str],
         pseudo_texts: Optional[List[str]] = None,
         max_new_tokens: int = 64,
-    ) -> List[str]:
+        return_prompts: bool = False,
+    ) -> Any:
         pseudo_texts = pseudo_texts or [""] * len(questions)
         prompts = [self.build_prompt(q, p) for q, p in zip(questions, pseudo_texts)]
         inputs = self.processor(
@@ -446,4 +447,6 @@ class QwenVLWrapper:
                 if marker is not None:
                     cleaned = cleaned[marker:].strip()
             answers.append(cleaned)
+        if return_prompts:
+            return answers, prompts
         return answers
