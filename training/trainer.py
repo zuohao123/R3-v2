@@ -741,6 +741,9 @@ class Trainer:
                                 logging.warning(
                                     "Non-finite grads detected; skipping optimizer step."
                                 )
+                            if self.scaler:
+                                # Reset scaler state even when skipping the step to avoid double-unscale.
+                                self.scaler.update()
                             if self.optimizer is not None:
                                 self.optimizer.zero_grad(set_to_none=True)
                             global_step += 1
