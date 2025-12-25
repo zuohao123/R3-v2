@@ -122,6 +122,7 @@ class Trainer:
         self.last_grad_norm: Optional[float] = None
         self.last_grad_nonfinite: Optional[float] = None
         self.last_grad_max_abs: Optional[float] = None
+        self.last_bad_params: Optional[list[str]] = None
 
         self.train_dataset = UnifiedQADataset(
             config.data.train_jsonl,
@@ -203,7 +204,7 @@ class Trainer:
         else:
             self.optimizer = None
 
-        if self.config.training.distributed_backend == "deepspeed":
+        if self.config.training.distributed_backend == "deepspeed" or self.config.training.disable_grad_scaler:
             self.scaler = None
         else:
             if config.training.fp16 and self.distributed:
@@ -523,19 +524,26 @@ class Trainer:
 
     def _grad_finite_stats(self) -> Dict[str, float]:
         """Inspect gradients for non-finite values."""
-        params = itertools.chain(self.qwen.model.parameters(), self.r3.parameters())
+        bad_params: list[str] = []
+        params = itertools.chain(
+            self.qwen.model.named_parameters(), self.r3.named_parameters()
+        )
         nonfinite = 0
         max_abs = 0.0
-        for param in params:
+        for name, param in params:
             grad = param.grad
             if grad is None:
                 continue
             if not torch.isfinite(grad).all():
                 nonfinite += 1
                 grad.data = torch.nan_to_num(grad.data, nan=0.0, posinf=0.0, neginf=0.0)
+                if len(bad_params) < 3:
+                    bad_params.append(name)
             max_abs = max(max_abs, float(grad.abs().max().item()))
         self.last_grad_nonfinite = float(nonfinite)
         self.last_grad_max_abs = float(max_abs)
+        if bad_params:
+            self.last_bad_params = bad_params
         return {"grad_nonfinite": float(nonfinite), "grad_max_abs": float(max_abs)}
 
     @staticmethod
@@ -736,11 +744,16 @@ class Trainer:
                             )
                             dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
                             skip_step = bool(skip_tensor.item() > 0)
-                        if skip_step:
+                        if skip_step and self.config.training.skip_nonfinite_grads:
                             if self.is_main_process:
                                 logging.warning(
                                     "Non-finite grads detected; skipping optimizer step."
                                 )
+                                if self.last_bad_params:
+                                    logging.warning(
+                                        "Non-finite grad params (sample): %s",
+                                        ", ".join(self.last_bad_params),
+                                    )
                             if self.scaler:
                                 # Reset scaler state even when skipping the step to avoid double-unscale.
                                 self.scaler.update()
@@ -750,6 +763,15 @@ class Trainer:
                             if pbar is not None:
                                 pbar.update(1)
                             continue
+                        if skip_step and self.is_main_process:
+                            logging.warning(
+                                "Non-finite grads detected; zeroed and continuing."
+                            )
+                            if self.last_bad_params:
+                                logging.warning(
+                                    "Non-finite grad params (sample): %s",
+                                    ", ".join(self.last_bad_params),
+                                )
                         if self.scaler:
                             self._clip_gradients()
                             self.scaler.step(self.optimizer)

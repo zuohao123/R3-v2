@@ -36,6 +36,8 @@ def main() -> None:
     parser.add_argument("--max_length", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--loss_scale", type=float, default=None)
+    parser.add_argument("--disable_grad_scaler", action="store_true")
+    parser.add_argument("--skip_nonfinite_grads", action="store_true")
     parser.add_argument("--sample_every", type=int, default=0)
     parser.add_argument("--sample_num", type=int, default=1)
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
@@ -109,6 +111,10 @@ def main() -> None:
         cfg.data.num_workers = args.num_workers
     if args.loss_scale is not None:
         cfg.training.loss_scale = args.loss_scale
+    if args.disable_grad_scaler:
+        cfg.training.disable_grad_scaler = True
+    if args.skip_nonfinite_grads:
+        cfg.training.skip_nonfinite_grads = True
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens

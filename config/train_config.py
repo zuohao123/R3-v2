@@ -114,6 +114,8 @@ class TrainingConfig:
     bf16: bool = True
     fp16: bool = False
     loss_scale: float = 256.0
+    disable_grad_scaler: bool = False
+    skip_nonfinite_grads: bool = False
     sampling_alpha: Optional[float] = None
     sample_every: int = 0
     sample_num: int = 1
