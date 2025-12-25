@@ -39,6 +39,79 @@ This produces:
 
 ## 2) Build Unified JSONL (with image_prefix)
 
+## 2a) Build OCR Cache (Recommended for high-quality pseudo-text)
+
+Install OCR engine (recommended):
+```bash
+pip install paddleocr
+```
+
+Optional (GPU): install paddlepaddle for CUDA that matches your system.
+
+Build OCR cache per dataset (uses existing raw JSONL + images):
+```bash
+python scripts/build_ocr_cache.py \
+  --raw_dir data/raw/screenqa \
+  --image_root data/raw/screenqa \
+  --out_path data/ocr/screenqa_ocr.jsonl \
+  --engine paddleocr \
+  --lang en \
+  --use_angle_cls \
+  --use_gpu
+
+python scripts/build_ocr_cache.py \
+  --raw_dir data/raw/chartqa \
+  --image_root data/raw/chartqa \
+  --out_path data/ocr/chartqa_ocr.jsonl \
+  --engine paddleocr \
+  --lang en \
+  --use_angle_cls \
+  --use_gpu
+
+python scripts/build_ocr_cache.py \
+  --raw_dir data/raw/infovqa \
+  --image_root data/raw/infovqa \
+  --out_path data/ocr/infovqa_ocr.jsonl \
+  --engine paddleocr \
+  --lang en \
+  --use_angle_cls \
+  --use_gpu
+```
+
+Then rebuild unified JSON with OCR:
+```bash
+python data/preprocess/build_unified_json.py \
+  --dataset screenqa \
+  --raw_dir data/raw/screenqa \
+  --out_dir data/unified \
+  --image_prefix screenqa \
+  --ocr_cache data/ocr/screenqa_ocr.jsonl
+
+python data/preprocess/build_unified_json.py \
+  --dataset chartqa \
+  --raw_dir data/raw/chartqa \
+  --out_dir data/unified \
+  --image_prefix chartqa \
+  --ocr_cache data/ocr/chartqa_ocr.jsonl
+
+python data/preprocess/build_unified_json.py \
+  --dataset infovqa \
+  --raw_dir data/raw/infovqa \
+  --out_dir data/unified \
+  --image_prefix infovqa \
+  --ocr_cache data/ocr/infovqa_ocr.jsonl
+```
+
+Or use the one-shot helper (rebuild unified + indices):
+```bash
+python scripts/rebuild_unified_indices.py \
+  --raw_root data/raw \
+  --out_dir data/unified \
+  --image_root data/raw \
+  --index_dir indices \
+  --ocr_root data/ocr
+```
+
 To **merge datasets into a single training set**, make sure each sample keeps a dataset prefix so
 `image_root` can be shared across datasets.
 

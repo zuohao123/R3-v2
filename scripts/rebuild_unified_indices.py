@@ -98,6 +98,11 @@ def main() -> None:
     parser.add_argument("--image_root", default="data/raw")
     parser.add_argument("--index_dir", default="indices")
     parser.add_argument("--skip_indices", action="store_true")
+    parser.add_argument("--ocr_root", default=None, help="Directory with OCR caches")
+    parser.add_argument("--screenqa_ocr", default=None)
+    parser.add_argument("--chartqa_ocr", default=None)
+    parser.add_argument("--infovqa_ocr", default=None)
+    parser.add_argument("--ocr_max_chars", type=int, default=1200)
     parser.add_argument("--image_encoder", default="models/clip-vit-b32-laion2B")
     parser.add_argument("--text_encoder", default="models/all-MiniLM-L6-v2")
     parser.add_argument("--batch_size", type=int, default=16)
@@ -114,18 +119,44 @@ def main() -> None:
     chartqa_raw = os.path.join(args.raw_root, "chartqa")
     infovqa_raw = os.path.join(args.raw_root, "infovqa")
 
+    screenqa_ocr = args.screenqa_ocr
+    chartqa_ocr = args.chartqa_ocr
+    infovqa_ocr = args.infovqa_ocr
+    if args.ocr_root:
+        screenqa_ocr = screenqa_ocr or os.path.join(args.ocr_root, "screenqa_ocr.jsonl")
+        chartqa_ocr = chartqa_ocr or os.path.join(args.ocr_root, "chartqa_ocr.jsonl")
+        infovqa_ocr = infovqa_ocr or os.path.join(args.ocr_root, "infovqa_ocr.jsonl")
+
     if os.path.exists(screenqa_raw):
-        build_screenqa_unified(screenqa_raw, args.out_dir, image_prefix="screenqa")
+        build_screenqa_unified(
+            screenqa_raw,
+            args.out_dir,
+            image_prefix="screenqa",
+            ocr_cache=screenqa_ocr,
+            ocr_max_chars=args.ocr_max_chars,
+        )
     else:
         logging.warning("ScreenQA raw dir not found: %s", screenqa_raw)
 
     if os.path.exists(chartqa_raw):
-        build_chartqa_unified(chartqa_raw, args.out_dir, image_prefix="chartqa")
+        build_chartqa_unified(
+            chartqa_raw,
+            args.out_dir,
+            image_prefix="chartqa",
+            ocr_cache=chartqa_ocr,
+            ocr_max_chars=args.ocr_max_chars,
+        )
     else:
         logging.warning("ChartQA raw dir not found: %s", chartqa_raw)
 
     if os.path.exists(infovqa_raw):
-        build_infovqa_unified(infovqa_raw, args.out_dir, image_prefix="infovqa")
+        build_infovqa_unified(
+            infovqa_raw,
+            args.out_dir,
+            image_prefix="infovqa",
+            ocr_cache=infovqa_ocr,
+            ocr_max_chars=args.ocr_max_chars,
+        )
     else:
         logging.warning("InfoVQA raw dir not found: %s", infovqa_raw)
 

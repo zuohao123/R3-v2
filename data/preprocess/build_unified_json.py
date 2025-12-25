@@ -62,7 +62,59 @@ def _apply_prefix(image_path: str, prefix: Optional[str]) -> str:
     return os.path.join(prefix, image_path)
 
 
-def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str] = None) -> None:
+def _load_ocr_cache(path: Optional[str]) -> Dict[str, str]:
+    cache: Dict[str, str] = {}
+    if not path:
+        return cache
+    if not os.path.exists(path):
+        logging.warning("OCR cache not found: %s", path)
+        return cache
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            key = str(record.get("image_path", "")).strip()
+            if not key:
+                continue
+            text = record.get("ocr_text") or record.get("text") or record.get("value") or ""
+            text = str(text).strip()
+            if text:
+                cache[key] = text
+    return cache
+
+
+def _lookup_ocr(
+    image_path: str, image_prefix: Optional[str], cache: Dict[str, str], max_chars: int
+) -> str:
+    if not cache:
+        return ""
+    candidates = [image_path]
+    if image_prefix:
+        candidates.append(os.path.join(image_prefix, image_path))
+    for key in candidates:
+        text = cache.get(key)
+        if text:
+            return text[:max_chars] if max_chars > 0 else text
+    return ""
+
+
+def _compose_pseudo_text(tag: str, question: str, ocr_text: str, extra: Optional[str] = None) -> str:
+    parts = [f"{tag}: {question}"]
+    if extra:
+        parts.append(extra)
+    if ocr_text:
+        parts.append(f"OCR: {ocr_text}")
+    return " ".join(part for part in parts if part).strip()
+
+
+def build_screenqa_unified(
+    raw_dir: str,
+    out_dir: str,
+    image_prefix: Optional[str] = None,
+    ocr_cache: Optional[str] = None,
+    ocr_max_chars: int = 1200,
+) -> None:
     """Convert ScreenQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "screenqa_raw_train.jsonl")
     val_path = _first_existing(
@@ -73,17 +125,21 @@ def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[st
         ]
     )
 
+    ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
         answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
-                "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT]",
+                "pseudo_text": _compose_pseudo_text(
+                    "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
+                ),
             }
         )
     _write_jsonl(os.path.join(out_dir, "screenqa_unified_train.jsonl"), unified_train)
@@ -95,12 +151,15 @@ def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[st
         for raw in val_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_val.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
-                    "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT]",
+                    "pseudo_text": _compose_pseudo_text(
+                        "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
+                    ),
                 }
             )
         _write_jsonl(os.path.join(out_dir, "screenqa_unified_val.jsonl"), unified_val)
@@ -109,7 +168,13 @@ def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[st
         logging.warning("ScreenQA validation file not found; skipping val split.")
 
 
-def build_chartqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str] = None) -> None:
+def build_chartqa_unified(
+    raw_dir: str,
+    out_dir: str,
+    image_prefix: Optional[str] = None,
+    ocr_cache: Optional[str] = None,
+    ocr_max_chars: int = 1200,
+) -> None:
     """Convert ChartQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "chartqa_raw_train.jsonl")
     eval_path = _first_existing(
@@ -120,17 +185,19 @@ def build_chartqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
         ]
     )
 
+    ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
         answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
-                "pseudo_text": f"CHARTQA_CONTEXT: {question}",
+                "pseudo_text": _compose_pseudo_text("CHARTQA_CONTEXT", question, ocr_text),
             }
         )
     _write_jsonl(os.path.join(out_dir, "chartqa_unified_train.jsonl"), unified_train)
@@ -142,12 +209,15 @@ def build_chartqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
         for raw in eval_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_eval.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
-                    "pseudo_text": f"CHARTQA_CONTEXT: {question}",
+                    "pseudo_text": _compose_pseudo_text(
+                        "CHARTQA_CONTEXT", question, ocr_text
+                    ),
                 }
             )
         _write_jsonl(os.path.join(out_dir, "chartqa_unified_val.jsonl"), unified_eval)
@@ -156,7 +226,13 @@ def build_chartqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
         logging.warning("ChartQA validation/test file not found; skipping val split.")
 
 
-def build_infovqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str] = None) -> None:
+def build_infovqa_unified(
+    raw_dir: str,
+    out_dir: str,
+    image_prefix: Optional[str] = None,
+    ocr_cache: Optional[str] = None,
+    ocr_max_chars: int = 1200,
+) -> None:
     """Convert InfoVQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "infovqa_raw_train.jsonl")
     eval_path = _first_existing(
@@ -167,18 +243,23 @@ def build_infovqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
         ]
     )
 
+    ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
         answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
-                "pseudo_text": (
-                    f"INFOVQA_CONTEXT: {question} [PREDICTED_TYPE:INFOGRAPHIC]"
+                "pseudo_text": _compose_pseudo_text(
+                    "INFOVQA_CONTEXT",
+                    question,
+                    ocr_text,
+                    extra="[PREDICTED_TYPE:INFOGRAPHIC]",
                 ),
             }
         )
@@ -191,13 +272,17 @@ def build_infovqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[str
         for raw in eval_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_eval.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
-                    "pseudo_text": (
-                        f"INFOVQA_CONTEXT: {question} [PREDICTED_TYPE:INFOGRAPHIC]"
+                    "pseudo_text": _compose_pseudo_text(
+                        "INFOVQA_CONTEXT",
+                        question,
+                        ocr_text,
+                        extra="[PREDICTED_TYPE:INFOGRAPHIC]",
                     ),
                 }
             )
@@ -222,17 +307,37 @@ def main() -> None:
         default=None,
         help="Optional prefix to prepend to image_path (useful for multi-dataset merges)",
     )
+    parser.add_argument("--ocr_cache", default=None, help="Optional OCR cache JSONL path")
+    parser.add_argument("--ocr_max_chars", type=int, default=1200)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     os.makedirs(args.out_dir, exist_ok=True)
 
     if args.dataset == "screenqa":
-        build_screenqa_unified(args.raw_dir, args.out_dir, image_prefix=args.image_prefix)
+        build_screenqa_unified(
+            args.raw_dir,
+            args.out_dir,
+            image_prefix=args.image_prefix,
+            ocr_cache=args.ocr_cache,
+            ocr_max_chars=args.ocr_max_chars,
+        )
     elif args.dataset == "chartqa":
-        build_chartqa_unified(args.raw_dir, args.out_dir, image_prefix=args.image_prefix)
+        build_chartqa_unified(
+            args.raw_dir,
+            args.out_dir,
+            image_prefix=args.image_prefix,
+            ocr_cache=args.ocr_cache,
+            ocr_max_chars=args.ocr_max_chars,
+        )
     else:
-        build_infovqa_unified(args.raw_dir, args.out_dir, image_prefix=args.image_prefix)
+        build_infovqa_unified(
+            args.raw_dir,
+            args.out_dir,
+            image_prefix=args.image_prefix,
+            ocr_cache=args.ocr_cache,
+            ocr_max_chars=args.ocr_max_chars,
+        )
 
 
 if __name__ == "__main__":
