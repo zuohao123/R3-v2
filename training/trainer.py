@@ -120,6 +120,8 @@ class Trainer:
         )
         self._set_seed(config.training.seed + self.rank)
         self.last_grad_norm: Optional[float] = None
+        self.last_grad_nonfinite: Optional[float] = None
+        self.last_grad_max_abs: Optional[float] = None
 
         self.train_dataset = UnifiedQADataset(
             config.data.train_jsonl,
@@ -506,16 +508,35 @@ class Trainer:
             return {}
         seq_len = min(logits.size(1), max_tokens)
         vocab = min(logits.size(-1), max_vocab)
-        sample = logits[:, :seq_len, :vocab].float()
-        sample = torch.nan_to_num(sample, nan=0.0, posinf=0.0, neginf=0.0)
+        raw = logits[:, :seq_len, :vocab].float()
+        nan_count = float(torch.isnan(raw).sum().item())
+        inf_count = float(torch.isinf(raw).sum().item())
+        sample = torch.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
         return {
             "logit_max": float(sample.max().item()),
             "logit_min": float(sample.min().item()),
             "logit_std": float(sample.std().item()),
             "logit_abs": float(sample.abs().mean().item()),
-            "logit_nan": float(torch.isnan(sample).sum().item()),
-            "logit_inf": float(torch.isinf(sample).sum().item()),
+            "logit_nan": nan_count,
+            "logit_inf": inf_count,
         }
+
+    def _grad_finite_stats(self) -> Dict[str, float]:
+        """Inspect gradients for non-finite values."""
+        params = itertools.chain(self.qwen.model.parameters(), self.r3.parameters())
+        nonfinite = 0
+        max_abs = 0.0
+        for param in params:
+            grad = param.grad
+            if grad is None:
+                continue
+            if not torch.isfinite(grad).all():
+                nonfinite += 1
+                grad.data = torch.nan_to_num(grad.data, nan=0.0, posinf=0.0, neginf=0.0)
+            max_abs = max(max_abs, float(grad.abs().max().item()))
+        self.last_grad_nonfinite = float(nonfinite)
+        self.last_grad_max_abs = float(max_abs)
+        return {"grad_nonfinite": float(nonfinite), "grad_max_abs": float(max_abs)}
 
     @staticmethod
     def _truncate(text: str, max_len: int = 240) -> str:
@@ -707,6 +728,26 @@ class Trainer:
                     if (global_step + 1) % self.config.training.gradient_accumulation == 0:
                         if self.scaler:
                             self.scaler.unscale_(self.optimizer)
+                        grad_stats = self._grad_finite_stats()
+                        skip_step = grad_stats["grad_nonfinite"] > 0
+                        if self.distributed:
+                            skip_tensor = torch.tensor(
+                                1 if skip_step else 0, device=self.device, dtype=torch.int
+                            )
+                            dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
+                            skip_step = bool(skip_tensor.item() > 0)
+                        if skip_step:
+                            if self.is_main_process:
+                                logging.warning(
+                                    "Non-finite grads detected; skipping optimizer step."
+                                )
+                            if self.optimizer is not None:
+                                self.optimizer.zero_grad(set_to_none=True)
+                            global_step += 1
+                            if pbar is not None:
+                                pbar.update(1)
+                            continue
+                        if self.scaler:
                             self._clip_gradients()
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
@@ -770,7 +811,7 @@ class Trainer:
                     if "label_ratio" in losses:
                         label_ratio = float(losses["label_ratio"].item())
                     logging.info(
-                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | grad %s | logit[max %.2f min %.2f std %.2f abs %.2f nan %.0f inf %.0f] | eta %s",
+                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | grad %s max_abs %s nonfinite %s | logit[max %.2f min %.2f std %.2f abs %.2f nan %.0f inf %.0f] | eta %s",
                         epoch,
                         global_step,
                         losses["total"].item(),
@@ -783,6 +824,8 @@ class Trainer:
                         conf_stats if conf_stats is not None else "n/a",
                         label_ratio if label_ratio is not None else -1.0,
                         f"{self.last_grad_norm:.2f}" if self.last_grad_norm is not None else "n/a",
+                        f"{self.last_grad_max_abs:.2f}" if self.last_grad_max_abs is not None else "n/a",
+                        f"{self.last_grad_nonfinite:.0f}" if self.last_grad_nonfinite is not None else "n/a",
                         logit_stats.get("logit_max", 0.0),
                         logit_stats.get("logit_min", 0.0),
                         logit_stats.get("logit_std", 0.0),
