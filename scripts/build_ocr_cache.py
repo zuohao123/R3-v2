@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import logging
 import os
@@ -55,6 +56,26 @@ def _resolve_image_path(path: str, image_root: str) -> str:
     if image_root and not os.path.isabs(path):
         return os.path.join(image_root, path)
     return path
+
+
+def _assign_shard(image_path: str, num_shards: int) -> int:
+    digest = hashlib.md5(image_path.encode("utf-8")).hexdigest()
+    return int(digest, 16) % num_shards
+
+
+def _get_shard_id(shard_id: Optional[int]) -> int:
+    if shard_id is not None:
+        return shard_id
+    env_rank = os.environ.get("LOCAL_RANK") or os.environ.get("RANK")
+    if env_rank is None:
+        raise ValueError("--shard_id is required when --num_shards > 1.")
+    return int(env_rank)
+
+
+def _shard_out_path(out_path: str, shard_id: int) -> str:
+    base, ext = os.path.splitext(out_path)
+    ext = ext or ".jsonl"
+    return f"{base}.shard{shard_id}{ext}"
 
 
 def _normalize_text(text: str) -> str:
@@ -215,6 +236,24 @@ def _write_jsonl(records: Iterable[Dict[str, Any]], out_path: str) -> None:
             f.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def _merge_shards(out_path: str, num_shards: int) -> None:
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    for shard_id in range(num_shards):
+        shard_path = _shard_out_path(out_path, shard_id)
+        if not os.path.exists(shard_path):
+            logging.warning("Missing shard file: %s", shard_path)
+            continue
+        for record in _iter_jsonl([shard_path]):
+            image_path = record.get("image_path")
+            if not image_path or image_path in seen:
+                continue
+            seen.add(image_path)
+            merged.append(record)
+    _write_jsonl(merged, out_path)
+    logging.info("Merged %d shards into %s (%d entries)", num_shards, out_path, len(merged))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build OCR cache JSONL")
     parser.add_argument("--raw_dir", default=None, help="Raw dataset dir with *_raw_*.jsonl")
@@ -229,9 +268,21 @@ def main() -> None:
     parser.add_argument("--max_chars", type=int, default=1200)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--log_every", type=int, default=200)
+    parser.add_argument("--num_shards", type=int, default=1)
+    parser.add_argument("--shard_id", type=int, default=None)
+    parser.add_argument("--merge_shards", type=int, default=None)
+    parser.add_argument(
+        "--bind_gpu",
+        action="store_true",
+        help="Bind each shard to its LOCAL_RANK GPU (recommended for torchrun).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    if args.merge_shards:
+        _merge_shards(args.out_path, args.merge_shards)
+        return
 
     jsonl_paths: List[str] = []
     if args.raw_dir:
@@ -241,6 +292,13 @@ def main() -> None:
     jsonl_paths = [p for p in jsonl_paths if os.path.exists(p)]
     if not jsonl_paths:
         raise ValueError("No JSONL files found. Provide --raw_dir or --jsonl.")
+
+    shard_id = 0
+    if args.num_shards > 1:
+        shard_id = _get_shard_id(args.shard_id)
+        if args.bind_gpu and args.use_gpu:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(shard_id)
+        logging.info("Using shard %d/%d", shard_id, args.num_shards)
 
     engine = OCREngine(
         engine=args.engine,
@@ -258,6 +316,8 @@ def main() -> None:
         image_path = record.get("image_path")
         if not image_path or image_path in seen:
             continue
+        if args.num_shards > 1 and _assign_shard(image_path, args.num_shards) != shard_id:
+            continue
         seen.add(image_path)
         img_path = _resolve_image_path(image_path, args.image_root)
         try:
@@ -272,8 +332,11 @@ def main() -> None:
         if args.log_every > 0 and total % args.log_every == 0:
             logging.info("OCR progress: %d", total)
 
-    _write_jsonl(records, args.out_path)
-    logging.info("Saved OCR cache: %s (%d entries)", args.out_path, len(records))
+    out_path = args.out_path
+    if args.num_shards > 1:
+        out_path = _shard_out_path(args.out_path, shard_id)
+    _write_jsonl(records, out_path)
+    logging.info("Saved OCR cache: %s (%d entries)", out_path, len(records))
 
 
 if __name__ == "__main__":

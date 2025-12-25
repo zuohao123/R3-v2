@@ -78,6 +78,22 @@ python scripts/build_ocr_cache.py \
   --use_gpu
 ```
 
+Multi-GPU OCR (8x V100) with sharding:
+```bash
+torchrun --nproc_per_node=8 scripts/build_ocr_cache.py \
+  --raw_dir data/raw/screenqa \
+  --image_root data/raw/screenqa \
+  --out_path data/ocr/screenqa_ocr.jsonl \
+  --engine paddleocr \
+  --lang en \
+  --use_angle_cls \
+  --use_gpu \
+  --num_shards 8 \
+  --bind_gpu
+
+python scripts/build_ocr_cache.py --out_path data/ocr/screenqa_ocr.jsonl --merge_shards 8
+```
+
 Then rebuild unified JSON with OCR:
 ```bash
 python data/preprocess/build_unified_json.py \
