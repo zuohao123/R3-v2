@@ -108,21 +108,27 @@ python scripts/build_indices.py --out_dir indices --merge_shards 8
 ## 5) Train (Single GPU / LoRA recommended first)
 
 ```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 python scripts/train_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --train_jsonl data/unified/train.jsonl \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --bf16 \
+  --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
-  --use_lora
+  --use_lora \
+  --disable_teacher \
+  --gradient_checkpointing
 ```
 
-## 5b) Train with FSDP (8x V100, full fine-tune)
+## 5b) Train with FSDP (8x V100, LoRA recommended)
 
 ```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
   --model_name models/Qwen3-VL-8B-Instruct \
@@ -130,15 +136,21 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --bf16 \
+  --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
-  --grad_accum 2
+  --grad_accum 4 \
+  --fsdp_min_params 10000000 \
+  --use_lora \
+  --disable_teacher \
+  --gradient_checkpointing
 ```
 
 ## 5c) Train with DeepSpeed ZeRO-3 (8x V100)
 
 ```bash
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 deepspeed --num_gpus=8 scripts/train_r3.py \
   --backend deepspeed \
   --deepspeed_config configs/deepspeed_zero3.json \
@@ -147,10 +159,13 @@ deepspeed --num_gpus=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --bf16 \
+  --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
-  --grad_accum 2
+  --grad_accum 4 \
+  --use_lora \
+  --disable_teacher \
+  --gradient_checkpointing
 ```
 
 Note: DeepSpeed checkpoints are sharded. To export a full FP16 model for evaluation, use:
@@ -240,10 +255,6 @@ python scripts/eval_r3.py \
 
 ## Multi-GPU / Model-Parallel Notes (8x V100)
 
-- **Full-precision fine-tuning of Qwen3-VL-8B is likely to OOM on 32GB without sharding.**
-- Current training loop is **single-process** and does **not** implement FSDP/ZeRO.
-- For true model-parallel training, you will need one of:
-  - **FSDP (torch.distributed.fsdp)** with auto-wrap + sharded optimizer states
-  - **DeepSpeed ZeRO-3** integrated into the training loop
-
-If you want, I can add FSDP/ZeRO support and a `torchrun` command path.
+- **Use fp16 on V100** (bf16 is not supported).
+- **LoRA + gradient checkpointing + disable_teacher** are the fastest ways to avoid OOM.
+- FSDP and DeepSpeed ZeRO-3 are integrated; pipeline/tensor parallel is not.

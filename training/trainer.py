@@ -346,10 +346,17 @@ class Trainer:
             "no_shard": ShardingStrategy.NO_SHARD,
         }
         sharding = sharding_map.get(self.config.training.fsdp_sharding, ShardingStrategy.FULL_SHARD)
-        auto_wrap_policy = functools.partial(
-            size_based_auto_wrap_policy,
-            min_num_params=self.config.training.fsdp_min_num_params,
-        )
+        auto_wrap_policy = None
+        if (
+            self.config.training.fsdp_min_num_params > 0
+            and not self.config.model.use_lora
+        ):
+            auto_wrap_policy = functools.partial(
+                size_based_auto_wrap_policy,
+                min_num_params=self.config.training.fsdp_min_num_params,
+            )
+        elif self.is_main_process and self.config.model.use_lora:
+            logging.info("FSDP auto-wrap disabled for LoRA to avoid tied-weight issues.")
         self.qwen.model = FSDP(
             self.qwen.model,
             mixed_precision=mp_policy,
