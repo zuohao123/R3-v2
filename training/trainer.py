@@ -639,27 +639,34 @@ class Trainer:
                     label_ratio_val = None
                     if "label_ratio" in losses:
                         label_ratio_val = float(losses["label_ratio"].item())
+                    skip_local = False
                     if (
                         self.config.training.min_label_ratio > 0
                         and label_ratio_val is not None
                         and label_ratio_val < self.config.training.min_label_ratio
                     ):
-                        if self.is_main_process:
-                            logging.warning(
-                                "Low label ratio %.4f at step %d; skipping update.",
-                                label_ratio_val,
-                                global_step,
-                            )
-                        if self.optimizer is not None:
-                            self.optimizer.zero_grad(set_to_none=True)
-                        global_step += 1
-                        if pbar is not None:
-                            pbar.update(1)
-                        continue
-
+                        skip_local = True
                     if not torch.isfinite(losses["total"]):
+                        skip_local = True
+                    if self.distributed:
+                        skip_tensor = torch.tensor(
+                            1 if skip_local else 0, device=self.device, dtype=torch.int
+                        )
+                        dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
+                        skip_local = bool(skip_tensor.item() > 0)
+                    if skip_local:
                         if self.is_main_process:
-                            logging.warning("Non-finite loss at step %d; skipping update.", global_step)
+                            if label_ratio_val is not None and label_ratio_val < self.config.training.min_label_ratio:
+                                logging.warning(
+                                    "Low label ratio %.4f at step %d; skipping update.",
+                                    label_ratio_val,
+                                    global_step,
+                                )
+                            if not torch.isfinite(losses["total"]):
+                                logging.warning(
+                                    "Non-finite loss at step %d; skipping update.",
+                                    global_step,
+                                )
                         if self.optimizer is not None:
                             self.optimizer.zero_grad(set_to_none=True)
                         global_step += 1
