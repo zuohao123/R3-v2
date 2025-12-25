@@ -39,14 +39,14 @@ def _normalize_answer(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
     if isinstance(value, dict):
-        for key in ("answer", "answers", "label", "text"):
+        for key in ("answer", "answers", "label", "text", "full_answer"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
     if isinstance(value, list):
         value = value[0] if value else fallback
     if isinstance(value, dict):
-        for key in ("answer", "answers", "label", "text"):
+        for key in ("answer", "answers", "label", "text", "full_answer"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
@@ -57,7 +57,15 @@ def _normalize_answer(value: Any, fallback: str) -> str:
 
 
 def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
-    for key in ("answer", "answers", "label", "gt_answer", "answer_text", "text"):
+    for key in (
+        "answer",
+        "answers",
+        "label",
+        "gt_answer",
+        "answer_text",
+        "full_answer",
+        "text",
+    ):
         if key in raw and raw[key] not in (None, ""):
             value = _normalize_answer(raw[key], fallback)
             if value != fallback:

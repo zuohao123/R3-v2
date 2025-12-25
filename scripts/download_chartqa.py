@@ -59,14 +59,14 @@ def _normalize_answer(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, dict):
-        for key in ("answer", "answers", "label", "text"):
+        for key in ("answer", "answers", "label", "text", "full_answer"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
     if isinstance(value, list):
         value = value[0] if value else ""
     if isinstance(value, dict):
-        for key in ("answer", "answers", "label", "text"):
+        for key in ("answer", "answers", "label", "text", "full_answer"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
@@ -92,7 +92,7 @@ def export_split(ds, split: str, out_dir: str, log_every: int) -> None:
             _get_first(sample, ["question", "query", "text"]), "[MISSING_QUESTION]"
         )
         answer = _normalize_answer(
-            _get_first(sample, ["answer", "answers", "label", "gt_answer"])
+            _get_first(sample, ["answer", "answers", "label", "gt_answer", "full_answer"])
         )
         image_name = f"{split}_{idx}.png"
         rel_path = os.path.join("images", image_name)
