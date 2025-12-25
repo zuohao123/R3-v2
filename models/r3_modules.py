@@ -1,6 +1,7 @@
 """R3++ modules for corruption, retrieval fusion, and reconstruction."""
 from __future__ import annotations
 
+import contextlib
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -111,12 +112,14 @@ class PrefixEnhancer(nn.Module):
         self.prefix_len = prefix_len
         self.proj = nn.Linear(text_dim, hidden_dim)
         self.to_prefix = nn.Linear(hidden_dim, hidden_dim * prefix_len)
+        self.norm = nn.LayerNorm(hidden_dim)
 
     def forward(self, text_embeds: torch.Tensor) -> torch.Tensor:
         pooled = text_embeds.mean(dim=1)
         hidden = torch.tanh(self.proj(pooled))
         prefix = self.to_prefix(hidden)
-        return prefix.view(prefix.size(0), self.prefix_len, -1)
+        prefix = prefix.view(prefix.size(0), self.prefix_len, -1)
+        return self.norm(prefix)
 
 
 class MemoryAligner(nn.Module):
@@ -212,6 +215,10 @@ class R3(nn.Module):
         self.gate = AdaptiveGate(config.hidden_dim) if config.enable_gate else None
         self.vis_proj = nn.Linear(image_dim, config.hidden_dim)
 
+    @staticmethod
+    def _sanitize(tensor: torch.Tensor, fill: float = 0.0) -> torch.Tensor:
+        return torch.nan_to_num(tensor, nan=fill, posinf=fill, neginf=fill)
+
     def _compose_context(
         self,
         retrieved_texts: List[List[str]],
@@ -277,65 +284,95 @@ class R3(nn.Module):
         answers: Optional[List[str]],
         corruption_level: float,
         top_k: int,
+        max_length: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if self.config.enable_corruption:
-            corr_images, corr_texts, c_vis, c_text = self.corruptor(
-                images, pseudo_texts, corruption_level
-            )
-        else:
-            corr_images = images
-            corr_texts = pseudo_texts
-            c_vis = torch.ones(len(images), 1)
-            c_text = torch.ones(len(images), 1)
+        device_type = self.qwen.device.type
+        amp_ctx = contextlib.nullcontext()
+        if self.config.force_fp32:
+            amp_ctx = torch.autocast(device_type=device_type, enabled=False)
 
-        queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
-        text_embeds, retrieved_texts = self._retrieve_texts(queries, top_k)
-        image_embeds, retrieved_images = self._retrieve_images(corr_images, top_k)
+        with amp_ctx:
+            if self.config.enable_corruption:
+                corr_images, corr_texts, c_vis, c_text = self.corruptor(
+                    images, pseudo_texts, corruption_level
+                )
+            else:
+                corr_images = images
+                corr_texts = pseudo_texts
+                c_vis = torch.ones(len(images), 1)
+                c_text = torch.ones(len(images), 1)
 
-        text_embeds = text_embeds.to(self.qwen.device)
-        image_embeds = image_embeds.to(self.qwen.device)
-        c_vis = c_vis.to(self.qwen.device)
-        c_text = c_text.to(self.qwen.device)
+            queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
+            text_embeds, retrieved_texts = self._retrieve_texts(queries, top_k)
+            image_embeds, retrieved_images = self._retrieve_images(corr_images, top_k)
 
-        prefix_tokens: List[torch.Tensor] = []
-        if self.prefix_enhancer is not None:
-            prefix_tokens.append(self.prefix_enhancer(text_embeds))
-        if self.latent_tokens is not None:
-            prefix_tokens.append(self.latent_tokens(len(images), (c_vis + c_text) / 2))
+            text_embeds = text_embeds.to(self.qwen.device, dtype=torch.float32)
+            image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)
+            c_vis = c_vis.to(self.qwen.device, dtype=torch.float32)
+            c_text = c_text.to(self.qwen.device, dtype=torch.float32)
 
-        if self.memory_aligner is not None:
-            mem_t, mem_i = self.memory_aligner(text_embeds, image_embeds)
-            mem_t = mem_t * c_text
-            mem_i = mem_i * c_vis
-        else:
-            mem_t = torch.zeros((len(images), self.config.hidden_dim), device=self.qwen.device)
-            mem_i = torch.zeros((len(images), self.config.hidden_dim), device=self.qwen.device)
+            text_embeds = self._sanitize(text_embeds)
+            image_embeds = self._sanitize(image_embeds)
 
-        vis_feat = self.vis_proj(image_embeds.mean(dim=1))
-        if self.gate is not None:
-            gates = self.gate(mem_t, mem_i, vis_feat)
-        else:
-            gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+            prefix_tokens: List[torch.Tensor] = []
+            if self.prefix_enhancer is not None:
+                prefix_tokens.append(self.prefix_enhancer(text_embeds))
+            if self.latent_tokens is not None:
+                prefix_tokens.append(self.latent_tokens(len(images), (c_vis + c_text) / 2))
 
-        prefix = None
-        if prefix_tokens:
-            prefix = torch.cat(prefix_tokens, dim=1)
-            prefix = prefix * gates[:, 0:1].unsqueeze(-1)
+            if self.memory_aligner is not None:
+                mem_t, mem_i = self.memory_aligner(text_embeds, image_embeds)
+                mem_t = mem_t * c_text
+                mem_i = mem_i * c_vis
+            else:
+                mem_t = torch.zeros(
+                    (len(images), self.config.hidden_dim),
+                    device=self.qwen.device,
+                    dtype=torch.float32,
+                )
+                mem_i = torch.zeros(
+                    (len(images), self.config.hidden_dim),
+                    device=self.qwen.device,
+                    dtype=torch.float32,
+                )
 
-        if self.config.enable_context:
-            contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
-            aug_pseudo_texts = [
-                f"{text} {ctx}".strip() if ctx else text
-                for text, ctx in zip(corr_texts, contexts)
-            ]
-        else:
-            aug_pseudo_texts = corr_texts
+            mem_t = self._sanitize(mem_t)
+            mem_i = self._sanitize(mem_i)
+            vis_feat = self.vis_proj(image_embeds.mean(dim=1))
+            vis_feat = self._sanitize(vis_feat)
+            if self.gate is not None:
+                gates = self.gate(mem_t, mem_i, vis_feat)
+                gates = self._sanitize(gates, fill=1.0 / 3)
+                gates = gates / gates.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+            else:
+                gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+
+            prefix = None
+            if prefix_tokens:
+                prefix = torch.cat(prefix_tokens, dim=1)
+                prefix = self._sanitize(prefix)
+                prefix = prefix * gates[:, 0:1].unsqueeze(-1)
+
+            if self.config.enable_context:
+                contexts = self._compose_context(retrieved_texts, retrieved_images, gates, top_k)
+                aug_pseudo_texts = [
+                    f"{text} {ctx}".strip() if ctx else text
+                    for text, ctx in zip(corr_texts, contexts)
+                ]
+            else:
+                aug_pseudo_texts = corr_texts
+
+            if self.config.max_context_chars > 0:
+                aug_pseudo_texts = [
+                    text[: self.config.max_context_chars] for text in aug_pseudo_texts
+                ]
 
         outputs = self.qwen.forward_student(
             corr_images,
             questions,
             aug_pseudo_texts,
             answers,
+            max_length=max_length,
             prefix_embeds=prefix,
             use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
         )
@@ -377,6 +414,10 @@ class R3(nn.Module):
         else:
             contexts = ["" for _ in corr_texts]
             aug_pseudo_texts = corr_texts
+        if self.config.max_context_chars > 0:
+            aug_pseudo_texts = [
+                text[: self.config.max_context_chars] for text in aug_pseudo_texts
+            ]
         answers = self.qwen.generate_answer(
             corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
         )

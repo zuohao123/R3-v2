@@ -31,6 +31,9 @@ def main() -> None:
     parser.add_argument("--learning_rate", type=float, default=1e-5)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument("--max_grad_norm", type=float, default=None)
+    parser.add_argument("--min_label_ratio", type=float, default=None)
+    parser.add_argument("--max_length", type=int, default=None)
     parser.add_argument("--sample_every", type=int, default=0)
     parser.add_argument("--sample_num", type=int, default=1)
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
@@ -50,7 +53,7 @@ def main() -> None:
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--index_dir", default="indices")
-    parser.add_argument("--top_k", type=int, default=5)
+    parser.add_argument("--top_k", type=int, default=3)
     parser.add_argument(
         "--backend",
         choices=["none", "fsdp", "deepspeed"],
@@ -74,6 +77,9 @@ def main() -> None:
     parser.add_argument("--disable_latent_tokens", action="store_true")
     parser.add_argument("--disable_gate", action="store_true")
     parser.add_argument("--disable_context", action="store_true")
+    parser.add_argument("--max_context_chars", type=int, default=None)
+    parser.add_argument("--r3_fp32", action="store_true", help="Run R3 modules in fp32")
+    parser.add_argument("--r3_fp16", action="store_true", help="Allow autocast in R3 modules")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -91,6 +97,12 @@ def main() -> None:
     cfg.training.learning_rate = args.learning_rate
     cfg.training.gradient_accumulation = args.grad_accum
     cfg.training.log_every = args.log_every
+    if args.max_grad_norm is not None:
+        cfg.training.max_grad_norm = args.max_grad_norm
+    if args.min_label_ratio is not None:
+        cfg.training.min_label_ratio = args.min_label_ratio
+    if args.max_length is not None:
+        cfg.data.max_length = args.max_length
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
@@ -130,6 +142,12 @@ def main() -> None:
     cfg.r3.enable_latent_tokens = not args.disable_latent_tokens
     cfg.r3.enable_gate = not args.disable_gate
     cfg.r3.enable_context = not args.disable_context
+    if args.max_context_chars is not None:
+        cfg.r3.max_context_chars = args.max_context_chars
+    if args.r3_fp16:
+        cfg.r3.force_fp32 = False
+    if args.r3_fp32:
+        cfg.r3.force_fp32 = True
 
     trainer = Trainer(cfg)
     trainer.train()

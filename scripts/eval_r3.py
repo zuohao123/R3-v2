@@ -43,7 +43,8 @@ def main() -> None:
     parser.add_argument("--image_root", default="")
     parser.add_argument("--index_dir", default="indices")
     parser.add_argument("--out_json", default="eval_results.json")
-    parser.add_argument("--top_k", type=int, default=5)
+    parser.add_argument("--max_length", type=int, default=None)
+    parser.add_argument("--top_k", type=int, default=3)
     parser.add_argument(
         "--eval_mode",
         choices=["r3", "base"],
@@ -88,6 +89,8 @@ def main() -> None:
 
     cfg.data.val_jsonl = args.val_jsonl
     cfg.data.image_root = args.image_root
+    if args.max_length is not None:
+        cfg.data.max_length = args.max_length
     cfg.retrieval.index_dir = args.index_dir
     cfg.retrieval.image_index_path = f"{args.index_dir}/image.index"
     cfg.retrieval.image_meta_path = f"{args.index_dir}/image.meta.json"

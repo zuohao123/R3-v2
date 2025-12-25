@@ -1,6 +1,7 @@
 """Trainer for R3++ multimodal QA."""
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
@@ -55,6 +56,7 @@ class R3TrainModule(torch.nn.Module):
         answers,
         corruption_level: float,
         top_k: int,
+        max_length: Optional[int] = None,
     ) -> Any:
         bundle = self.r3.forward_student(
             images,
@@ -63,6 +65,7 @@ class R3TrainModule(torch.nn.Module):
             answers,
             corruption_level,
             top_k,
+            max_length=max_length,
         )
         return bundle["outputs"]
 
@@ -418,6 +421,8 @@ class Trainer:
         )
         ds_config["fp16"] = {"enabled": bool(self.config.training.fp16)}
         ds_config["bf16"] = {"enabled": bool(self.config.training.bf16)}
+        if self.config.training.max_grad_norm and self.config.training.max_grad_norm > 0:
+            ds_config.setdefault("gradient_clipping", self.config.training.max_grad_norm)
         return ds_config
 
     def _init_deepspeed(self) -> None:
@@ -470,6 +475,22 @@ class Trainer:
                 json.dump(self.config.to_dict(), f, indent=2)
         if self.distributed:
             dist.barrier()
+
+    def _clip_gradients(self) -> None:
+        max_norm = self.config.training.max_grad_norm
+        if not max_norm or max_norm <= 0:
+            return
+        if self.config.training.distributed_backend == "fsdp":
+            FSDP.clip_grad_norm_(self.qwen.model, max_norm)
+            torch.nn.utils.clip_grad_norm_(self.r3.parameters(), max_norm)
+            return
+        params = [
+            p
+            for p in itertools.chain(self.qwen.model.parameters(), self.r3.parameters())
+            if p.requires_grad
+        ]
+        if params:
+            torch.nn.utils.clip_grad_norm_(params, max_norm)
 
     @staticmethod
     def _truncate(text: str, max_len: int = 240) -> str:
@@ -585,6 +606,7 @@ class Trainer:
                             clean["answers"],
                             corruption_level,
                             self.config.retrieval.top_k,
+                            self.config.data.max_length,
                         )
                         losses = compute_total_loss(
                             student_outputs,
@@ -604,6 +626,7 @@ class Trainer:
                             clean["answers"],
                             corruption_level,
                             self.config.retrieval.top_k,
+                            max_length=self.config.data.max_length,
                         )
                         losses = compute_total_loss(
                             student_bundle["outputs"],
@@ -612,6 +635,27 @@ class Trainer:
                             self.config.loss.temperature,
                         )
                         loss = losses["total"] / self.config.training.gradient_accumulation
+
+                    label_ratio_val = None
+                    if "label_ratio" in losses:
+                        label_ratio_val = float(losses["label_ratio"].item())
+                    if (
+                        self.config.training.min_label_ratio > 0
+                        and label_ratio_val is not None
+                        and label_ratio_val < self.config.training.min_label_ratio
+                    ):
+                        if self.is_main_process:
+                            logging.warning(
+                                "Low label ratio %.4f at step %d; skipping update.",
+                                label_ratio_val,
+                                global_step,
+                            )
+                        if self.optimizer is not None:
+                            self.optimizer.zero_grad(set_to_none=True)
+                        global_step += 1
+                        if pbar is not None:
+                            pbar.update(1)
+                        continue
 
                     if not torch.isfinite(losses["total"]):
                         if self.is_main_process:
@@ -630,10 +674,13 @@ class Trainer:
 
                     if (global_step + 1) % self.config.training.gradient_accumulation == 0:
                         if self.scaler:
+                            self.scaler.unscale_(self.optimizer)
+                            self._clip_gradients()
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
                         else:
                             assert self.optimizer is not None
+                            self._clip_gradients()
                             self.optimizer.step()
                         assert self.optimizer is not None
                         self.optimizer.zero_grad(set_to_none=True)

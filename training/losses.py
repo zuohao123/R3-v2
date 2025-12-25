@@ -10,6 +10,9 @@ import torch.nn.functional as F
 def _safe_cross_entropy(
     logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -100
 ) -> torch.Tensor:
+    logits = logits.float()
+    logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+    logits = logits.clamp(-1e4, 1e4)
     vocab = logits.size(-1)
     loss = F.cross_entropy(
         logits.view(-1, vocab),
@@ -42,8 +45,14 @@ def consistency_loss(
     student_logits: torch.Tensor, teacher_logits: torch.Tensor, temperature: float
 ) -> torch.Tensor:
     """KL divergence between student and teacher logits."""
+    student_logits = student_logits.float()
+    teacher_logits = teacher_logits.float()
+    student_logits = torch.nan_to_num(student_logits, nan=0.0, posinf=1e4, neginf=-1e4)
+    teacher_logits = torch.nan_to_num(teacher_logits, nan=0.0, posinf=1e4, neginf=-1e4)
     student = F.log_softmax(student_logits / temperature, dim=-1)
     teacher = F.softmax(teacher_logits / temperature, dim=-1)
+    student = torch.nan_to_num(student, nan=0.0, posinf=0.0, neginf=0.0)
+    teacher = torch.nan_to_num(teacher, nan=0.0, posinf=0.0, neginf=0.0)
     min_len = min(student.size(1), teacher.size(1))
     student = student[:, :min_len, :]
     teacher = teacher[:, :min_len, :]

@@ -27,7 +27,7 @@ class DataConfig:
     val_jsonl: str = "data/unified/val.jsonl"
     image_root: str = ""
     max_samples: Optional[int] = None
-    max_length: int = 256
+    max_length: int = 4096
     image_size: int = 448
     num_workers: int = 4
 
@@ -44,7 +44,7 @@ class RetrievalConfig:
     text_embeds_path: str = "indices/text.embeds.npy"
     image_encoder_name: str = "models/clip-vit-b32-laion2B"
     text_encoder_name: str = "models/all-MiniLM-L6-v2"
-    top_k: int = 5
+    top_k: int = 3
     use_retrieval: bool = True
 
 
@@ -66,6 +66,8 @@ class R3Config:
     latent_tokens: int = 4
     hidden_dim: int = 4096
     use_soft_prefix: bool = False
+    force_fp32: bool = True
+    max_context_chars: int = 0
     enable_corruption: bool = True
     enable_text_retrieval: bool = True
     enable_image_retrieval: bool = True
@@ -100,6 +102,8 @@ class TrainingConfig:
     num_epochs: int = 1
     learning_rate: float = 1e-5
     weight_decay: float = 0.01
+    max_grad_norm: float = 1.0
+    min_label_ratio: float = 0.0
     gradient_accumulation: int = 1
     max_steps: Optional[int] = None
     warmup_steps: int = 0
