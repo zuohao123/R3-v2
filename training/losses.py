@@ -11,8 +11,8 @@ def _safe_cross_entropy(
     logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -100
 ) -> torch.Tensor:
     logits = logits.float()
-    logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
-    logits = logits.clamp(-1e4, 1e4)
+    logits = torch.nan_to_num(logits, nan=0.0, posinf=50.0, neginf=-50.0)
+    logits = logits.clamp(-50.0, 50.0)
     if logits.size(1) < 2 or labels.size(1) < 2:
         return torch.tensor(0.0, device=logits.device)
     shift_logits = logits[:, :-1, :].contiguous()
@@ -40,10 +40,6 @@ def _label_ratio(labels: torch.Tensor, ignore_index: int = -100) -> float:
 
 def cross_entropy_loss(outputs: Any) -> torch.Tensor:
     """Return a stable loss value, falling back to custom CE when labels exist."""
-    if hasattr(outputs, "loss") and outputs.loss is not None:
-        loss = outputs.loss
-        if torch.isfinite(loss):
-            return loss
     if hasattr(outputs, "labels") and outputs.labels is not None and hasattr(outputs, "logits"):
         return _safe_cross_entropy(outputs.logits, outputs.labels)
     raise ValueError("Model outputs do not include a loss value.")

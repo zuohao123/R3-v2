@@ -119,6 +119,7 @@ class Trainer:
             config.model.device if torch.cuda.is_available() else "cpu"
         )
         self._set_seed(config.training.seed + self.rank)
+        self.last_grad_norm: Optional[float] = None
 
         self.train_dataset = UnifiedQADataset(
             config.data.train_jsonl,
@@ -481,8 +482,13 @@ class Trainer:
         if not max_norm or max_norm <= 0:
             return
         if self.config.training.distributed_backend == "fsdp":
-            FSDP.clip_grad_norm_(self.qwen.model, max_norm)
-            torch.nn.utils.clip_grad_norm_(self.r3.parameters(), max_norm)
+            norm_qwen = FSDP.clip_grad_norm_(self.qwen.model, max_norm)
+            norm_r3 = torch.nn.utils.clip_grad_norm_(self.r3.parameters(), max_norm)
+            try:
+                norm_val = float(torch.max(norm_qwen, norm_r3).item())
+            except Exception:
+                norm_val = float(norm_qwen) if hasattr(norm_qwen, "item") else None
+            self.last_grad_norm = norm_val
             return
         params = [
             p
@@ -490,7 +496,26 @@ class Trainer:
             if p.requires_grad
         ]
         if params:
-            torch.nn.utils.clip_grad_norm_(params, max_norm)
+            norm_val = torch.nn.utils.clip_grad_norm_(params, max_norm)
+            self.last_grad_norm = float(norm_val)
+
+    @staticmethod
+    def _logit_stats(logits: torch.Tensor, max_tokens: int = 8, max_vocab: int = 2048) -> Dict[str, float]:
+        """Compute lightweight diagnostic stats from a logit slice."""
+        if logits is None:
+            return {}
+        seq_len = min(logits.size(1), max_tokens)
+        vocab = min(logits.size(-1), max_vocab)
+        sample = logits[:, :seq_len, :vocab].float()
+        sample = torch.nan_to_num(sample, nan=0.0, posinf=0.0, neginf=0.0)
+        return {
+            "logit_max": float(sample.max().item()),
+            "logit_min": float(sample.min().item()),
+            "logit_std": float(sample.std().item()),
+            "logit_abs": float(sample.abs().mean().item()),
+            "logit_nan": float(torch.isnan(sample).sum().item()),
+            "logit_inf": float(torch.isinf(sample).sum().item()),
+        }
 
     @staticmethod
     def _truncate(text: str, max_len: int = 240) -> str:
@@ -723,6 +748,7 @@ class Trainer:
                     scale = self.scaler.get_scale() if self.scaler is not None else None
                     gate_stats = None
                     conf_stats = None
+                    logit_stats: Dict[str, float] = {}
                     if self.config.training.distributed_backend != "deepspeed":
                         if isinstance(student_bundle, dict) and "gates" in student_bundle:
                             gates = student_bundle["gates"].mean(dim=0).tolist()
@@ -731,6 +757,10 @@ class Trainer:
                             c_vis = student_bundle["c_vis"].mean().item()
                             c_text = student_bundle["c_text"].mean().item()
                             conf_stats = (round(c_vis, 3), round(c_text, 3))
+                        if isinstance(student_bundle, dict) and "outputs" in student_bundle:
+                            outputs = student_bundle["outputs"]
+                            if hasattr(outputs, "logits") and outputs.logits is not None:
+                                logit_stats = self._logit_stats(outputs.logits)
                     elapsed = time.time() - start_time
                     eta = None
                     if total_steps is not None and global_step > 0:
@@ -740,7 +770,7 @@ class Trainer:
                     if "label_ratio" in losses:
                         label_ratio = float(losses["label_ratio"].item())
                     logging.info(
-                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | eta %s",
+                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | grad %s | logit[max %.2f min %.2f std %.2f abs %.2f nan %.0f inf %.0f] | eta %s",
                         epoch,
                         global_step,
                         losses["total"].item(),
@@ -752,6 +782,13 @@ class Trainer:
                         gate_stats if gate_stats is not None else "n/a",
                         conf_stats if conf_stats is not None else "n/a",
                         label_ratio if label_ratio is not None else -1.0,
+                        f"{self.last_grad_norm:.2f}" if self.last_grad_norm is not None else "n/a",
+                        logit_stats.get("logit_max", 0.0),
+                        logit_stats.get("logit_min", 0.0),
+                        logit_stats.get("logit_std", 0.0),
+                        logit_stats.get("logit_abs", 0.0),
+                        logit_stats.get("logit_nan", 0.0),
+                        logit_stats.get("logit_inf", 0.0),
                         f"{eta/60:.1f}m" if eta is not None else "n/a",
                     )
 
