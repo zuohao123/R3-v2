@@ -626,16 +626,33 @@ class Trainer:
 
         self.qwen.model.eval()
         self.r3.eval()
-        with torch.no_grad():
-            outputs = self.r3.generate(
-                images,
-                questions,
-                pseudo_texts,
-                corruption_level=corruption_level,
-                top_k=self.config.retrieval.top_k,
-                max_new_tokens=self.config.training.sample_max_new_tokens,
-                return_retrieval=True,
-            )
+        if self.distributed and self.config.training.distributed_backend == "fsdp":
+            with FSDP.summon_full_params(self.qwen.model, rank0_only=True):
+                if not self.is_main_process:
+                    self.qwen.model.train()
+                    self.r3.train()
+                    return
+                with torch.no_grad():
+                    outputs = self.r3.generate(
+                        images,
+                        questions,
+                        pseudo_texts,
+                        corruption_level=corruption_level,
+                        top_k=self.config.retrieval.top_k,
+                        max_new_tokens=self.config.training.sample_max_new_tokens,
+                        return_retrieval=True,
+                    )
+        else:
+            with torch.no_grad():
+                outputs = self.r3.generate(
+                    images,
+                    questions,
+                    pseudo_texts,
+                    corruption_level=corruption_level,
+                    top_k=self.config.retrieval.top_k,
+                    max_new_tokens=self.config.training.sample_max_new_tokens,
+                    return_retrieval=True,
+                )
         preds, retrieved_texts, retrieved_image_paths, contexts, prompts = outputs
         self.qwen.model.train()
         self.r3.train()
