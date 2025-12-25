@@ -20,7 +20,10 @@ from torch.distributed.fsdp import (
     StateDictType,
 )
 from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
-from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+from torch.distributed.fsdp.wrap import (
+    size_based_auto_wrap_policy,
+    transformer_auto_wrap_policy,
+)
 from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from torch.utils.data.distributed import DistributedSampler
 import functools
@@ -392,17 +395,33 @@ class Trainer:
         }
         sharding = sharding_map.get(self.config.training.fsdp_sharding, ShardingStrategy.FULL_SHARD)
         auto_wrap_policy = None
-        if self.config.training.fsdp_min_num_params > 0:
-            if self.config.r3.use_soft_prefix:
+        wrap_classes = set()
+        for module in self.qwen.model.modules():
+            name = module.__class__.__name__
+            if any(key in name for key in ("DecoderLayer", "TransformerLayer", "Block")):
+                wrap_classes.add(module.__class__)
+        if wrap_classes:
+            auto_wrap_policy = functools.partial(
+                transformer_auto_wrap_policy,
+                transformer_layer_cls=wrap_classes,
+            )
+        elif self.config.training.fsdp_min_num_params > 0:
+            auto_wrap_policy = functools.partial(
+                size_based_auto_wrap_policy,
+                min_num_params=self.config.training.fsdp_min_num_params,
+            )
+        ignored_modules = []
+        if self.config.r3.use_soft_prefix:
+            try:
+                emb = self.qwen.model.get_input_embeddings()
+                if emb is not None:
+                    ignored_modules.append(emb)
+            except Exception:
                 if self.is_main_process:
                     logging.warning(
-                        "Disabling FSDP auto-wrap because soft-prefix uses embedding module directly."
+                        "Failed to resolve input embeddings; disabling FSDP auto-wrap."
                     )
-            else:
-                auto_wrap_policy = functools.partial(
-                    size_based_auto_wrap_policy,
-                    min_num_params=self.config.training.fsdp_min_num_params,
-                )
+                auto_wrap_policy = None
         self.qwen.model = FSDP(
             self.qwen.model,
             mixed_precision=mp_policy,
@@ -411,6 +430,8 @@ class Trainer:
             use_orig_params=self.config.training.fsdp_use_orig_params,
             auto_wrap_policy=auto_wrap_policy,
             device_id=self.device,
+            ignored_modules=ignored_modules,
+            limit_all_gathers=True,
         )
 
     def _build_deepspeed_config(self) -> Dict[str, Any]:
