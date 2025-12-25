@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--out_json", default="eval_results.json")
     parser.add_argument("--max_length", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
+    parser.add_argument("--max_eval_samples", type=int, default=None)
     parser.add_argument("--top_k", type=int, default=3)
     parser.add_argument(
         "--eval_mode",
@@ -94,6 +95,8 @@ def main() -> None:
         cfg.data.max_length = args.max_length
     if args.num_workers is not None:
         cfg.data.num_workers = args.num_workers
+    if args.max_eval_samples is not None:
+        cfg.evaluation.max_eval_samples = args.max_eval_samples
     cfg.retrieval.index_dir = args.index_dir
     cfg.retrieval.image_index_path = f"{args.index_dir}/image.index"
     cfg.retrieval.image_meta_path = f"{args.index_dir}/image.meta.json"
@@ -161,7 +164,11 @@ def main() -> None:
                     strict=False,
                 )
 
-    dataset = UnifiedQADataset(cfg.data.val_jsonl, image_root=cfg.data.image_root)
+    dataset = UnifiedQADataset(
+        cfg.data.val_jsonl,
+        image_root=cfg.data.image_root,
+        max_samples=cfg.evaluation.max_eval_samples,
+    )
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.evaluation.batch_size,
