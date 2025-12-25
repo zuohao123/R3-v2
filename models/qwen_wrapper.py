@@ -325,10 +325,16 @@ class QwenVLWrapper:
                 )
                 labels = torch.cat([prefix_ignore, labels], dim=1)
                 inputs["labels"] = labels
-            return self.model(
+            outputs = self.model(
                 inputs_embeds=inputs_embeds, attention_mask=attention_mask, **inputs
             )
-        return self.model(**inputs)
+            if "labels" in inputs:
+                outputs.labels = inputs["labels"]
+            return outputs
+        outputs = self.model(**inputs)
+        if "labels" in inputs:
+            outputs.labels = inputs["labels"]
+        return outputs
 
     def forward_teacher(
         self,

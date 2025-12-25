@@ -658,8 +658,11 @@ class Trainer:
                     if total_steps is not None and global_step > 0:
                         rate = elapsed / global_step
                         eta = rate * max(total_steps - global_step, 0)
+                    label_ratio = None
+                    if "label_ratio" in losses:
+                        label_ratio = float(losses["label_ratio"].item())
                     logging.info(
-                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | eta %s",
+                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | eta %s",
                         epoch,
                         global_step,
                         losses["total"].item(),
@@ -670,6 +673,7 @@ class Trainer:
                         f"{scale:.1f}" if scale is not None else "n/a",
                         gate_stats if gate_stats is not None else "n/a",
                         conf_stats if conf_stats is not None else "n/a",
+                        label_ratio if label_ratio is not None else -1.0,
                         f"{eta/60:.1f}m" if eta is not None else "n/a",
                     )
 
