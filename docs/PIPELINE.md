@@ -20,7 +20,7 @@ python scripts/download_retrieval_models.py --out_dir models
 ```
 
 This writes:
-- `models/clip-vit-base-patch32`
+- `models/clip-vit-b32-laion2B`
 - `models/all-MiniLM-L6-v2`
 
 These paths are now the default in `config/train_config.py`.
@@ -116,6 +116,7 @@ python scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
+  --top_k 3 \
   --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
@@ -136,6 +137,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
+  --top_k 3 \
   --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
@@ -159,6 +161,7 @@ deepspeed --num_gpus=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
+  --top_k 3 \
   --fp16 \
   --batch_size 1 \
   --sampling_alpha 0.5 \
@@ -183,7 +186,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ## 6b) Evaluate Base vs R3 (Clean + Corrupted)
@@ -197,7 +201,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ### Base model (corruption sweep)
@@ -210,7 +215,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ### R3 model (clean)
@@ -222,7 +228,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ### R3 model (corruption sweep)
@@ -234,7 +241,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ### R3 ablation example (disable retrieval + prefix + gate)
@@ -250,7 +258,8 @@ python scripts/eval_r3.py \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
-  --index_dir indices
+  --index_dir indices \
+  --top_k 3
 ```
 
 ## Multi-GPU / Model-Parallel Notes (8x V100)
