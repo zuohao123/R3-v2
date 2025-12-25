@@ -70,6 +70,7 @@ class QwenVLWrapper:
             self.teacher = copy.deepcopy(self.model)
             self.teacher.requires_grad_(False)
             self.teacher.eval()
+        self._context_margin_tokens = 8
 
     @property
     def tokenizer(self):
@@ -191,6 +192,52 @@ class QwenVLWrapper:
             )
         return messages
 
+    def _count_tokens(self, text: str) -> int:
+        tokenizer = self.processor.tokenizer
+        return len(tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    def _truncate_pseudo_texts(
+        self,
+        questions: List[str],
+        pseudo_texts: List[str],
+        answers: List[str],
+        max_length: Optional[int],
+    ) -> List[str]:
+        if not max_length:
+            return pseudo_texts
+        if not hasattr(self.processor, "apply_chat_template"):
+            return pseudo_texts
+        tokenizer = self.processor.tokenizer
+        truncated: List[str] = []
+        margin = self._context_margin_tokens
+        for question, pseudo_text, answer in zip(questions, pseudo_texts, answers):
+            if not pseudo_text:
+                truncated.append(pseudo_text)
+                continue
+            base_full = self.processor.apply_chat_template(
+                self._build_messages(question, "", answer),
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            base_len = self._count_tokens(base_full)
+            max_ctx_tokens = max_length - base_len - margin
+            if max_ctx_tokens <= 0:
+                truncated.append("")
+                continue
+            ctx_ids = tokenizer(pseudo_text, add_special_tokens=False)["input_ids"]
+            if len(ctx_ids) > max_ctx_tokens:
+                ctx_ids = ctx_ids[:max_ctx_tokens]
+                pseudo_text = tokenizer.decode(ctx_ids, skip_special_tokens=True)
+            full_text = self.processor.apply_chat_template(
+                self._build_messages(question, pseudo_text, answer),
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            if self._count_tokens(full_text) > max_length:
+                pseudo_text = ""
+            truncated.append(pseudo_text)
+        return truncated
+
     def build_prompt(self, question: str, pseudo_text: Optional[str] = None) -> str:
         """Build a prompt with image placeholder and optional pseudo-text."""
         if hasattr(self.processor, "apply_chat_template"):
@@ -235,6 +282,13 @@ class QwenVLWrapper:
         max_length: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         pseudo_texts = pseudo_texts or [""] * len(questions)
+        if answers is not None:
+            pseudo_texts = self._truncate_pseudo_texts(
+                questions,
+                pseudo_texts,
+                answers,
+                max_length,
+            )
         prompts: List[str] = []
         full_texts: List[str] = []
         if hasattr(self.processor, "apply_chat_template"):

@@ -27,7 +27,7 @@ class DataConfig:
     val_jsonl: str = "data/unified/val.jsonl"
     image_root: str = ""
     max_samples: Optional[int] = None
-    max_length: int = 2048
+    max_length: int = 4096
     image_size: int = 448
     num_workers: int = 4
 
