@@ -83,7 +83,7 @@ def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[st
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
-                "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT] {answer}",
+                "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT]",
             }
         )
     _write_jsonl(os.path.join(out_dir, "screenqa_unified_train.jsonl"), unified_train)
@@ -100,7 +100,7 @@ def build_screenqa_unified(raw_dir: str, out_dir: str, image_prefix: Optional[st
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
-                    "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT] {answer}",
+                    "pseudo_text": f"SCREENQA_CONTEXT: {question} [ANSWER_HINT]",
                 }
             )
         _write_jsonl(os.path.join(out_dir, "screenqa_unified_val.jsonl"), unified_val)
