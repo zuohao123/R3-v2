@@ -67,7 +67,7 @@ class R3TrainModule(torch.nn.Module):
             top_k,
             max_length=max_length,
         )
-        return bundle["outputs"]
+        return bundle
 
 
 class DistributedTemperatureSampler(Sampler[int]):
@@ -691,7 +691,7 @@ class Trainer:
                 if self.config.training.distributed_backend == "deepspeed":
                     with self._autocast():
                         assert self.engine is not None
-                        student_outputs = self.engine(
+                        student_bundle = self.engine(
                             corrupted["images"],
                             corrupted["questions"],
                             corrupted["pseudo_texts"],
@@ -701,10 +701,11 @@ class Trainer:
                             self.config.data.max_length,
                         )
                         losses = compute_total_loss(
-                            student_outputs,
+                            student_bundle,
                             teacher_outputs,
                             self.config.loss.consistency_weight,
                             self.config.loss.temperature,
+                            loss_cfg=self.config.loss,
                         )
                         loss = losses["total"]
                     self.engine.backward(loss)
@@ -721,10 +722,11 @@ class Trainer:
                             max_length=self.config.data.max_length,
                         )
                         losses = compute_total_loss(
-                            student_bundle["outputs"],
+                            student_bundle,
                             teacher_outputs,
                             self.config.loss.consistency_weight,
                             self.config.loss.temperature,
+                            loss_cfg=self.config.loss,
                         )
                         loss = losses["total"] / self.config.training.gradient_accumulation
 
@@ -853,18 +855,17 @@ class Trainer:
                     gate_stats = None
                     conf_stats = None
                     logit_stats: Dict[str, float] = {}
-                    if self.config.training.distributed_backend != "deepspeed":
-                        if isinstance(student_bundle, dict) and "gates" in student_bundle:
-                            gates = student_bundle["gates"].mean(dim=0).tolist()
-                            gate_stats = tuple(round(g, 3) for g in gates)
-                        if isinstance(student_bundle, dict) and "c_vis" in student_bundle:
-                            c_vis = student_bundle["c_vis"].mean().item()
-                            c_text = student_bundle["c_text"].mean().item()
-                            conf_stats = (round(c_vis, 3), round(c_text, 3))
-                        if isinstance(student_bundle, dict) and "outputs" in student_bundle:
-                            outputs = student_bundle["outputs"]
-                            if hasattr(outputs, "logits") and outputs.logits is not None:
-                                logit_stats = self._logit_stats(outputs.logits)
+                    if isinstance(student_bundle, dict) and "gates" in student_bundle:
+                        gates = student_bundle["gates"].mean(dim=0).tolist()
+                        gate_stats = tuple(round(g, 3) for g in gates)
+                    if isinstance(student_bundle, dict) and "c_vis" in student_bundle:
+                        c_vis = student_bundle["c_vis"].mean().item()
+                        c_text = student_bundle["c_text"].mean().item()
+                        conf_stats = (round(c_vis, 3), round(c_text, 3))
+                    if isinstance(student_bundle, dict) and "outputs" in student_bundle:
+                        outputs = student_bundle["outputs"]
+                        if hasattr(outputs, "logits") and outputs.logits is not None:
+                            logit_stats = self._logit_stats(outputs.logits)
                     elapsed = time.time() - start_time
                     eta = None
                     if total_steps is not None and global_step > 0:
@@ -873,13 +874,19 @@ class Trainer:
                     label_ratio = None
                     if "label_ratio" in losses:
                         label_ratio = float(losses["label_ratio"].item())
+                    gate_conf = losses.get("gate_conf")
+                    gate_ent = losses.get("gate_entropy")
+                    r_align = losses.get("retrieval_align")
                     logging.info(
-                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | grad %s max_abs %s nonfinite %s | logit[max %.2f min %.2f std %.2f abs %.2f nan %.0f inf %.0f] | eta %s",
+                        "epoch %d step %d | loss %.4f ce %.4f cons %.4f gconf %.4f gent %.4f ralign %.4f | corr %.2f | lr %s | scale %s | gate %s | conf %s | label %.3f | grad %s max_abs %s nonfinite %s | logit[max %.2f min %.2f std %.2f abs %.2f nan %.0f inf %.0f] | eta %s",
                         epoch,
                         global_step,
                         losses["total"].item(),
                         losses["ce"].item(),
                         losses["consistency"].item(),
+                        gate_conf.item() if gate_conf is not None else 0.0,
+                        gate_ent.item() if gate_ent is not None else 0.0,
+                        r_align.item() if r_align is not None else 0.0,
                         corruption_level,
                         f"{lr:.2e}" if lr is not None else "n/a",
                         f"{scale:.1f}" if scale is not None else "n/a",

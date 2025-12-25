@@ -411,6 +411,8 @@ class QwenVLWrapper:
         pseudo_texts: Optional[List[str]] = None,
         max_new_tokens: int = 64,
         return_prompts: bool = False,
+        prefix_embeds: Optional[torch.Tensor] = None,
+        use_soft_prefix: bool = False,
     ) -> Any:
         pseudo_texts = pseudo_texts or [""] * len(questions)
         prompts = [self.build_prompt(q, p) for q, p in zip(questions, pseudo_texts)]
@@ -422,12 +424,33 @@ class QwenVLWrapper:
             return_tensors="pt",
         )
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
+        if use_soft_prefix and prefix_embeds is not None:
+            input_ids = inputs.pop("input_ids")
+            attention_mask = inputs.pop("attention_mask")
+            token_embeds = self.model.get_input_embeddings()(input_ids)
+            prefix_embeds = prefix_embeds.to(token_embeds.dtype).to(token_embeds.device)
+            inputs_embeds = torch.cat([prefix_embeds, token_embeds], dim=1)
+            prefix_mask = torch.ones(
+                (attention_mask.size(0), prefix_embeds.size(1)),
+                device=attention_mask.device,
+                dtype=attention_mask.dtype,
             )
+            attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                )
+        else:
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                )
         decoded = self.processor.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         answers = []
         for prompt, text in zip(prompts, decoded):

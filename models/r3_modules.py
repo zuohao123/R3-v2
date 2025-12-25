@@ -6,6 +6,7 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageFilter
+import numpy as np
 import torch
 from torch import nn
 
@@ -114,8 +115,14 @@ class PrefixEnhancer(nn.Module):
         self.to_prefix = nn.Linear(hidden_dim, hidden_dim * prefix_len)
         self.norm = nn.LayerNorm(hidden_dim)
 
-    def forward(self, text_embeds: torch.Tensor) -> torch.Tensor:
-        pooled = text_embeds.mean(dim=1)
+    def forward(
+        self, text_embeds: torch.Tensor, weights: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        if weights is None:
+            pooled = text_embeds.mean(dim=1)
+        else:
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+            pooled = (text_embeds * weights.unsqueeze(-1)).sum(dim=1)
         hidden = torch.tanh(self.proj(pooled))
         prefix = self.to_prefix(hidden)
         prefix = prefix.view(prefix.size(0), self.prefix_len, -1)
@@ -131,11 +138,59 @@ class MemoryAligner(nn.Module):
         self.image_proj = nn.Linear(image_dim, hidden_dim)
 
     def forward(
-        self, text_embeds: torch.Tensor, image_embeds: torch.Tensor
+        self,
+        text_embeds: torch.Tensor,
+        image_embeds: torch.Tensor,
+        text_weights: Optional[torch.Tensor] = None,
+        image_weights: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        mem_t = torch.tanh(self.text_proj(text_embeds.mean(dim=1)))
-        mem_i = torch.tanh(self.image_proj(image_embeds.mean(dim=1)))
+        if text_weights is None:
+            pooled_text = text_embeds.mean(dim=1)
+        else:
+            text_weights = text_weights / text_weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+            pooled_text = (text_embeds * text_weights.unsqueeze(-1)).sum(dim=1)
+        if image_weights is None:
+            pooled_image = image_embeds.mean(dim=1)
+        else:
+            image_weights = image_weights / image_weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+            pooled_image = (image_embeds * image_weights.unsqueeze(-1)).sum(dim=1)
+        mem_t = torch.tanh(self.text_proj(pooled_text))
+        mem_i = torch.tanh(self.image_proj(pooled_image))
         return mem_t, mem_i
+
+
+class VisualMemoryTokens(nn.Module):
+    """Project retrieved image embeddings into memory tokens."""
+
+    def __init__(self, image_dim: int, hidden_dim: int, memory_len: int) -> None:
+        super().__init__()
+        self.memory_len = memory_len
+        self.proj = nn.Linear(image_dim, hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim)
+
+    def forward(
+        self, image_embeds: torch.Tensor, weights: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        batch, top_k, dim = image_embeds.shape
+        if weights is None:
+            weights = torch.full(
+                (batch, top_k), 1.0 / top_k, device=image_embeds.device
+            )
+        weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        take = min(self.memory_len, top_k)
+        _, indices = torch.topk(weights, k=take, dim=1)
+        gather = indices.unsqueeze(-1).expand(-1, -1, dim)
+        selected = torch.gather(image_embeds, 1, gather)
+        selected_weights = torch.gather(weights, 1, indices)
+        tokens = self.proj(selected) * selected_weights.unsqueeze(-1)
+        if self.memory_len > take:
+            pad = torch.zeros(
+                (batch, self.memory_len - take, tokens.size(-1)),
+                device=tokens.device,
+                dtype=tokens.dtype,
+            )
+            tokens = torch.cat([tokens, pad], dim=1)
+        return self.norm(tokens)
 
 
 class LatentImputationTokens(nn.Module):
@@ -207,6 +262,11 @@ class R3(nn.Module):
             if config.enable_memory
             else None
         )
+        self.visual_memory = (
+            VisualMemoryTokens(image_dim, config.hidden_dim, config.visual_memory_len)
+            if config.enable_visual_memory
+            else None
+        )
         self.latent_tokens = (
             LatentImputationTokens(config.latent_tokens, config.hidden_dim)
             if config.enable_latent_tokens
@@ -225,10 +285,26 @@ class R3(nn.Module):
         retrieved_images: List[List[str]],
         gates: torch.Tensor,
         top_k: int,
+        text_scores: Optional[torch.Tensor] = None,
+        image_scores: Optional[torch.Tensor] = None,
     ) -> List[str]:
         contexts = []
         for idx, (texts, imgs) in enumerate(zip(retrieved_texts, retrieved_images)):
             g_t, g_i, g_v = gates[idx].tolist()
+            if text_scores is not None:
+                scores = text_scores[idx].tolist()
+                texts = [
+                    text
+                    for text, score in zip(texts, scores)
+                    if score >= self.config.min_text_score
+                ]
+            if image_scores is not None:
+                scores = image_scores[idx].tolist()
+                imgs = [
+                    text
+                    for text, score in zip(imgs, scores)
+                    if score >= self.config.min_image_score
+                ]
             n_text = max(1, int(round(g_t * top_k))) if texts else 0
             n_img = max(0, int(round(g_i * top_k))) if imgs else 0
             selected = []
@@ -240,10 +316,39 @@ class R3(nn.Module):
             contexts.append(context.strip())
         return contexts
 
-    def _retrieve_texts(self, queries: List[str], top_k: int) -> Tuple[torch.Tensor, List[List[str]]]:
+    def _score_weights(
+        self, scores: Optional[np.ndarray], top_k: int, min_score: float
+    ) -> torch.Tensor:
+        if scores is None:
+            return torch.full((top_k,), 1.0 / top_k, device=self.qwen.device)
+        weights = torch.tensor(scores, device=self.qwen.device, dtype=torch.float32)
+        if min_score > -1.0:
+            weights = weights.masked_fill(weights < min_score, float("-inf"))
+        if self.config.use_score_weighting:
+            temperature = max(self.config.score_temperature, 1e-6)
+            weights = torch.softmax(weights / temperature, dim=-1)
+        else:
+            mask = torch.isfinite(weights)
+            weights = mask.float()
+        weights = torch.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+        row_sum = weights.sum(dim=-1, keepdim=True)
+        fallback = row_sum < 1e-6
+        if fallback.any():
+            weights = torch.where(
+                fallback,
+                torch.full_like(weights, 1.0 / weights.size(-1)),
+                weights / row_sum.clamp_min(1e-6),
+            )
+        else:
+            weights = weights / row_sum.clamp_min(1e-6)
+        return weights
+
+    def _retrieve_texts(
+        self, queries: List[str], top_k: int
+    ) -> Tuple[torch.Tensor, List[List[str]], Optional[np.ndarray]]:
         if self.text_retriever is None or not self.config.enable_text_retrieval:
             dummy = torch.zeros((len(queries), top_k, self.text_dim))
-            return dummy, [[] for _ in queries]
+            return dummy, [[] for _ in queries], None
         result = self.text_retriever.retrieve(queries, top_k)
         embeds = result.get("embeddings")
         if embeds is None:
@@ -251,14 +356,14 @@ class R3(nn.Module):
             embeds = self.text_retriever.encode_texts([t for row in texts for t in row])
             embeds = embeds.reshape(len(queries), top_k, -1)
         texts = [[meta.get("pseudo_text", "") for meta in row] for row in result["metadata"]]
-        return torch.from_numpy(embeds).float(), texts
+        return torch.from_numpy(embeds).float(), texts, result.get("scores")
 
     def _retrieve_images(
         self, images: List[Image.Image], top_k: int
-    ) -> Tuple[torch.Tensor, List[List[str]], List[List[str]]]:
+    ) -> Tuple[torch.Tensor, List[List[str]], List[List[str]], Optional[np.ndarray]]:
         if self.image_retriever is None or not self.config.enable_image_retrieval:
             dummy = torch.zeros((len(images), top_k, self.image_dim))
-            return dummy, [[] for _ in images], [[] for _ in images]
+            return dummy, [[] for _ in images], [[] for _ in images], None
         result = self.image_retriever.retrieve(images, top_k)
         embeds = result.get("embeddings")
         if embeds is None:
@@ -279,7 +384,7 @@ class R3(nn.Module):
         paths = [
             [meta.get("image_path", "") for meta in row] for row in result["metadata"]
         ]
-        return torch.from_numpy(embeds).float(), texts, paths
+        return torch.from_numpy(embeds).float(), texts, paths, result.get("scores")
 
     def forward_student(
         self,
@@ -308,8 +413,8 @@ class R3(nn.Module):
                 c_text = torch.ones(len(images), 1)
 
             queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
-            text_embeds, retrieved_texts = self._retrieve_texts(queries, top_k)
-            image_embeds, retrieved_images, retrieved_image_paths = self._retrieve_images(
+            text_embeds, retrieved_texts, text_scores = self._retrieve_texts(queries, top_k)
+            image_embeds, retrieved_images, retrieved_image_paths, image_scores = self._retrieve_images(
                 corr_images, top_k
             )
 
@@ -320,15 +425,36 @@ class R3(nn.Module):
 
             text_embeds = self._sanitize(text_embeds)
             image_embeds = self._sanitize(image_embeds)
+            text_weights = (
+                self._score_weights(text_scores, top_k, self.config.min_text_score)
+                if text_scores is not None
+                else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
+            )
+            image_weights = (
+                self._score_weights(image_scores, top_k, self.config.min_image_score)
+                if image_scores is not None
+                else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
+            )
 
             prefix_tokens: List[torch.Tensor] = []
             if self.prefix_enhancer is not None:
-                prefix_tokens.append(self.prefix_enhancer(text_embeds))
+                text_prefix = self.prefix_enhancer(text_embeds, text_weights)
+                prefix_tokens.append(text_prefix)
+            if self.visual_memory is not None:
+                visual_prefix = self.visual_memory(image_embeds, image_weights)
+                prefix_tokens.append(visual_prefix)
             if self.latent_tokens is not None:
                 prefix_tokens.append(self.latent_tokens(len(images), (c_vis + c_text) / 2))
 
+            retrieval_ready = (
+                self.memory_aligner is not None
+                and self.config.enable_text_retrieval
+                and self.config.enable_image_retrieval
+            )
             if self.memory_aligner is not None:
-                mem_t, mem_i = self.memory_aligner(text_embeds, image_embeds)
+                mem_t, mem_i = self.memory_aligner(
+                    text_embeds, image_embeds, text_weights=text_weights, image_weights=image_weights
+                )
                 mem_t = mem_t * c_text
                 mem_i = mem_i * c_vis
             else:
@@ -356,13 +482,28 @@ class R3(nn.Module):
 
             prefix = None
             if prefix_tokens:
-                prefix = torch.cat(prefix_tokens, dim=1)
+                scaled_tokens: List[torch.Tensor] = []
+                token_idx = 0
+                if self.prefix_enhancer is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 0:1].unsqueeze(-1))
+                    token_idx += 1
+                if self.visual_memory is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 1:2].unsqueeze(-1))
+                    token_idx += 1
+                if self.latent_tokens is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx])
+                    token_idx += 1
+                prefix = torch.cat(scaled_tokens, dim=1)
                 prefix = self._sanitize(prefix)
-                prefix = prefix * gates[:, 0:1].unsqueeze(-1)
 
             if self.config.enable_context:
                 contexts = self._compose_context(
-                    retrieved_texts, retrieved_images, gates, top_k
+                    retrieved_texts,
+                    retrieved_images,
+                    gates,
+                    top_k,
+                    text_scores=text_scores,
+                    image_scores=image_scores,
                 )
                 aug_pseudo_texts = [
                     f"{text} {ctx}".strip() if ctx else text
@@ -393,6 +534,9 @@ class R3(nn.Module):
             "c_text": c_text.detach(),
             "retrieved_texts": retrieved_texts,
             "retrieved_image_paths": retrieved_image_paths,
+            "mem_t": mem_t,
+            "mem_i": mem_i,
+            "retrieval_ready": retrieval_ready,
         }
 
     def generate(
@@ -413,14 +557,80 @@ class R3(nn.Module):
             corr_images = images
             corr_texts = pseudo_texts
         queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
-        _, retrieved_texts = self._retrieve_texts(queries, top_k)
-        _, retrieved_images, retrieved_image_paths = self._retrieve_images(
+        text_embeds, retrieved_texts, text_scores = self._retrieve_texts(queries, top_k)
+        image_embeds, retrieved_images, retrieved_image_paths, image_scores = self._retrieve_images(
             corr_images, top_k
         )
-        gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+        text_embeds = text_embeds.to(self.qwen.device, dtype=torch.float32)
+        image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)
+        text_embeds = self._sanitize(text_embeds)
+        image_embeds = self._sanitize(image_embeds)
+        text_weights = (
+            self._score_weights(text_scores, top_k, self.config.min_text_score)
+            if text_scores is not None
+            else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
+        )
+        image_weights = (
+            self._score_weights(image_scores, top_k, self.config.min_image_score)
+            if image_scores is not None
+            else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
+        )
+        if self.memory_aligner is not None:
+            mem_t, mem_i = self.memory_aligner(
+                text_embeds, image_embeds, text_weights=text_weights, image_weights=image_weights
+            )
+            mem_t = self._sanitize(mem_t)
+            mem_i = self._sanitize(mem_i)
+        else:
+            mem_t = torch.zeros(
+                (len(images), self.config.hidden_dim),
+                device=self.qwen.device,
+                dtype=torch.float32,
+            )
+            mem_i = torch.zeros(
+                (len(images), self.config.hidden_dim),
+                device=self.qwen.device,
+                dtype=torch.float32,
+            )
+        vis_feat = self.vis_proj(image_embeds.mean(dim=1))
+        vis_feat = self._sanitize(vis_feat)
+        if self.gate is not None:
+            gates = self.gate(mem_t, mem_i, vis_feat)
+            gates = self._sanitize(gates, fill=1.0 / 3)
+            gates = gates / gates.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+        else:
+            gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+        prefix = None
+        if self.config.use_soft_prefix:
+            prefix_tokens: List[torch.Tensor] = []
+            if self.prefix_enhancer is not None:
+                prefix_tokens.append(self.prefix_enhancer(text_embeds, text_weights))
+            if self.visual_memory is not None:
+                prefix_tokens.append(self.visual_memory(image_embeds, image_weights))
+            if self.latent_tokens is not None:
+                prefix_tokens.append(
+                    self.latent_tokens(len(images), torch.ones(len(images), 1, device=self.qwen.device))
+                )
+            if prefix_tokens:
+                scaled_tokens: List[torch.Tensor] = []
+                token_idx = 0
+                if self.prefix_enhancer is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 0:1].unsqueeze(-1))
+                    token_idx += 1
+                if self.visual_memory is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 1:2].unsqueeze(-1))
+                    token_idx += 1
+                if self.latent_tokens is not None:
+                    scaled_tokens.append(prefix_tokens[token_idx])
+                prefix = self._sanitize(torch.cat(scaled_tokens, dim=1))
         if self.config.enable_context:
             contexts = self._compose_context(
-                retrieved_texts, retrieved_images, gates, top_k
+                retrieved_texts,
+                retrieved_images,
+                gates,
+                top_k,
+                text_scores=text_scores,
+                image_scores=image_scores,
             )
             aug_pseudo_texts = [
                 f"{text} {ctx}".strip() if ctx else text
@@ -440,9 +650,16 @@ class R3(nn.Module):
                 aug_pseudo_texts,
                 max_new_tokens=max_new_tokens,
                 return_prompts=True,
+                prefix_embeds=prefix,
+                use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
             )
             return answers, retrieved_texts, retrieved_image_paths, contexts, prompts
         answers = self.qwen.generate_answer(
-            corr_images, questions, aug_pseudo_texts, max_new_tokens=max_new_tokens
+            corr_images,
+            questions,
+            aug_pseudo_texts,
+            max_new_tokens=max_new_tokens,
+            prefix_embeds=prefix,
+            use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
         )
         return answers

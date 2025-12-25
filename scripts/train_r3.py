@@ -41,6 +41,10 @@ def main() -> None:
     parser.add_argument("--skip_nonfinite_grads", action="store_true")
     parser.add_argument("--lora_lr_mult", type=float, default=None)
     parser.add_argument("--r3_lr_mult", type=float, default=None)
+    parser.add_argument("--gate_conf_weight", type=float, default=None)
+    parser.add_argument("--gate_entropy_weight", type=float, default=None)
+    parser.add_argument("--retrieval_align_weight", type=float, default=None)
+    parser.add_argument("--retrieval_align_temperature", type=float, default=None)
     parser.add_argument("--sample_every", type=int, default=0)
     parser.add_argument("--sample_num", type=int, default=1)
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
@@ -81,10 +85,18 @@ def main() -> None:
     parser.add_argument("--disable_image_retrieval", action="store_true")
     parser.add_argument("--disable_prefix", action="store_true")
     parser.add_argument("--disable_memory", action="store_true")
+    parser.add_argument("--disable_visual_memory", action="store_true")
     parser.add_argument("--disable_latent_tokens", action="store_true")
     parser.add_argument("--disable_gate", action="store_true")
     parser.add_argument("--disable_context", action="store_true")
     parser.add_argument("--max_context_chars", type=int, default=None)
+    parser.add_argument("--visual_memory_len", type=int, default=None)
+    parser.add_argument("--use_soft_prefix", action="store_true")
+    parser.add_argument("--disable_soft_prefix", action="store_true")
+    parser.add_argument("--score_temperature", type=float, default=None)
+    parser.add_argument("--min_text_score", type=float, default=None)
+    parser.add_argument("--min_image_score", type=float, default=None)
+    parser.add_argument("--disable_score_weighting", action="store_true")
     parser.add_argument("--r3_fp32", action="store_true", help="Run R3 modules in fp32")
     parser.add_argument("--r3_fp16", action="store_true", help="Allow autocast in R3 modules")
     args = parser.parse_args()
@@ -124,6 +136,14 @@ def main() -> None:
         cfg.training.lora_lr_mult = args.lora_lr_mult
     if args.r3_lr_mult is not None:
         cfg.training.r3_lr_mult = args.r3_lr_mult
+    if args.gate_conf_weight is not None:
+        cfg.loss.gate_conf_weight = args.gate_conf_weight
+    if args.gate_entropy_weight is not None:
+        cfg.loss.gate_entropy_weight = args.gate_entropy_weight
+    if args.retrieval_align_weight is not None:
+        cfg.loss.retrieval_align_weight = args.retrieval_align_weight
+    if args.retrieval_align_temperature is not None:
+        cfg.loss.retrieval_align_temperature = args.retrieval_align_temperature
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
@@ -160,11 +180,26 @@ def main() -> None:
     cfg.r3.enable_image_retrieval = not args.disable_image_retrieval
     cfg.r3.enable_prefix = not args.disable_prefix
     cfg.r3.enable_memory = not args.disable_memory
+    cfg.r3.enable_visual_memory = not args.disable_visual_memory
     cfg.r3.enable_latent_tokens = not args.disable_latent_tokens
     cfg.r3.enable_gate = not args.disable_gate
     cfg.r3.enable_context = not args.disable_context
     if args.max_context_chars is not None:
         cfg.r3.max_context_chars = args.max_context_chars
+    if args.visual_memory_len is not None:
+        cfg.r3.visual_memory_len = args.visual_memory_len
+    if args.use_soft_prefix:
+        cfg.r3.use_soft_prefix = True
+    if args.disable_soft_prefix:
+        cfg.r3.use_soft_prefix = False
+    if args.score_temperature is not None:
+        cfg.r3.score_temperature = args.score_temperature
+    if args.min_text_score is not None:
+        cfg.r3.min_text_score = args.min_text_score
+    if args.min_image_score is not None:
+        cfg.r3.min_image_score = args.min_image_score
+    if args.disable_score_weighting:
+        cfg.r3.use_score_weighting = False
     if args.r3_fp16:
         cfg.r3.force_fp32 = False
     if args.r3_fp32:

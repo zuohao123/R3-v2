@@ -63,8 +63,9 @@ class R3Config:
     """R3++ module hyperparameters."""
     prefix_len: int = 8
     latent_tokens: int = 4
+    visual_memory_len: int = 4
     hidden_dim: int = 4096
-    use_soft_prefix: bool = False
+    use_soft_prefix: bool = True
     force_fp32: bool = True
     max_context_chars: int = 0
     enable_corruption: bool = True
@@ -72,9 +73,14 @@ class R3Config:
     enable_image_retrieval: bool = True
     enable_prefix: bool = True
     enable_memory: bool = True
+    enable_visual_memory: bool = True
     enable_latent_tokens: bool = True
     enable_gate: bool = True
     enable_context: bool = True
+    use_score_weighting: bool = True
+    score_temperature: float = 1.0
+    min_text_score: float = -1.0
+    min_image_score: float = -1.0
     corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
 
 
@@ -83,6 +89,10 @@ class LossConfig:
     """Loss weights and temperature."""
     consistency_weight: float = 0.5
     temperature: float = 1.0
+    gate_conf_weight: float = 0.1
+    gate_entropy_weight: float = 0.01
+    retrieval_align_weight: float = 0.05
+    retrieval_align_temperature: float = 0.07
 
 
 @dataclass
