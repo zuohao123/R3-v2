@@ -211,18 +211,34 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
-### Base model (corruption sweep)
+### Base model only (corruption sweep, no R3 / no retrieval)
 ```bash
 python scripts/eval_r3.py \
   --eval_mode base \
   --corruption_levels 0,0.2,0.4,0.6,0.8 \
   --no_pseudo_text \
-  --corrupt_text_target pseudo_text \
+  --corrupt_text_target question \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --top_k 3
+  --top_k 3 \
+  --out_json results/base_corrupt.json
+```
+
+### Base model only (image-only corruption)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --corrupt_text_target none \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/base_corrupt_image_only.json
 ```
 
 ### R3 model (clean)
