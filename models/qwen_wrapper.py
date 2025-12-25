@@ -430,10 +430,20 @@ class QwenVLWrapper:
         decoded = self.processor.tokenizer.batch_decode(outputs, skip_special_tokens=True)
         answers = []
         for prompt, text in zip(prompts, decoded):
-            if text.startswith(prompt):
-                answers.append(text[len(prompt) :].strip())
-            elif "Answer:" in text:
-                answers.append(text.split("Answer:", 1)[-1].strip())
+            cleaned = text.strip()
+            if cleaned.startswith(prompt):
+                cleaned = cleaned[len(prompt) :].strip()
+            elif "Answer:" in cleaned:
+                cleaned = cleaned.split("Answer:", 1)[-1].strip()
             else:
-                answers.append(text.strip())
+                lowered = cleaned.lower()
+                marker = None
+                for tag in ("assistant", "assistant:", "\nassistant"):
+                    pos = lowered.rfind(tag)
+                    if pos != -1:
+                        marker = pos + len(tag)
+                        break
+                if marker is not None:
+                    cleaned = cleaned[marker:].strip()
+            answers.append(cleaned)
         return answers

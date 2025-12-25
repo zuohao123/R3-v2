@@ -620,22 +620,23 @@ class Trainer:
                 corruption_level,
             )
             for idx in range(n):
-                logging.info("  Image: %s", image_paths[idx])
-                logging.info("  Q: %s", self._truncate(questions[idx]))
-                logging.info("  GT: %s", self._truncate(answers[idx]))
-                logging.info("  Pred: %s", self._truncate(preds[idx]))
+                logging.info("  DATA image_path: %s", image_paths[idx])
+                logging.info("  DATA question: %s", self._truncate(questions[idx]))
+                logging.info("  DATA answer(gt): %s", self._truncate(answers[idx]))
+                logging.info("  DATA pseudo_text: %s", self._truncate(pseudo_texts[idx]))
                 if contexts[idx]:
-                    logging.info("  Context: %s", self._truncate(contexts[idx]))
+                    logging.info("  R3 context: %s", self._truncate(contexts[idx]))
                 if retrieved_texts[idx]:
                     shown = retrieved_texts[idx][: min(3, len(retrieved_texts[idx]))]
                     joined = " || ".join(self._truncate(t) for t in shown if t)
                     if joined:
-                        logging.info("  Retrieved text: %s", joined)
+                        logging.info("  RETRIEVAL text: %s", joined)
                 if retrieved_image_paths[idx]:
                     shown_imgs = retrieved_image_paths[idx][: min(3, len(retrieved_image_paths[idx]))]
                     joined_imgs = " || ".join(self._truncate(p) for p in shown_imgs if p)
                     if joined_imgs:
-                        logging.info("  Retrieved images: %s", joined_imgs)
+                        logging.info("  RETRIEVAL images: %s", joined_imgs)
+                logging.info("  MODEL pred: %s", self._truncate(preds[idx]))
 
     def train(self) -> None:
         total_steps = self.config.training.max_steps
