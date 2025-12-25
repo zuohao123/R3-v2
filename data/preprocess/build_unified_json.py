@@ -38,15 +38,31 @@ def _ensure_text(value: Any, fallback: str) -> str:
 def _normalize_answer(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
+    if isinstance(value, dict):
+        for key in ("answer", "answers", "label", "text"):
+            if key in value and value[key] not in (None, ""):
+                value = value[key]
+                break
     if isinstance(value, list):
         value = value[0] if value else fallback
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text"):
-            if key in value and value[key]:
+            if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
+        if isinstance(value, list):
+            value = value[0] if value else fallback
     text = str(value).strip()
     return text if text else fallback
+
+
+def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
+    for key in ("answer", "answers", "label", "gt_answer", "answer_text", "text"):
+        if key in raw and raw[key] not in (None, ""):
+            value = _normalize_answer(raw[key], fallback)
+            if value != fallback:
+                return value
+    return fallback
 
 
 def _first_existing(paths: List[str]) -> Optional[str]:
@@ -128,9 +144,13 @@ def build_screenqa_unified(
     ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
+    missing_train = 0
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-        answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        answer = _extract_answer(raw, "")
+        if not answer:
+            missing_train += 1
+            continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
@@ -145,13 +165,22 @@ def build_screenqa_unified(
         )
     _write_jsonl(os.path.join(out_dir, "screenqa_unified_train.jsonl"), unified_train)
     logging.info("Wrote ScreenQA train: %d", len(unified_train))
+    if missing_train:
+        logging.warning(
+            "ScreenQA train skipped %d/%d samples with missing answers.",
+            missing_train,
+            len(train_records),
+        )
 
     if val_path and os.path.exists(val_path):
         val_records = _read_jsonl(val_path)
         unified_val = []
+        missing_val = 0
         for raw in val_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-            answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            answer = _extract_answer(raw, "[MISSING_ANSWER]")
+            if answer == "[MISSING_ANSWER]":
+                missing_val += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_val.append(
                 {
@@ -166,6 +195,12 @@ def build_screenqa_unified(
             )
         _write_jsonl(os.path.join(out_dir, "screenqa_unified_val.jsonl"), unified_val)
         logging.info("Wrote ScreenQA val: %d", len(unified_val))
+        if missing_val:
+            logging.warning(
+                "ScreenQA val has %d/%d samples with missing answers.",
+                missing_val,
+                len(val_records),
+            )
     else:
         logging.warning("ScreenQA validation file not found; skipping val split.")
 
@@ -190,9 +225,13 @@ def build_chartqa_unified(
     ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
+    missing_train = 0
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-        answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        answer = _extract_answer(raw, "")
+        if not answer:
+            missing_train += 1
+            continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
@@ -205,13 +244,22 @@ def build_chartqa_unified(
         )
     _write_jsonl(os.path.join(out_dir, "chartqa_unified_train.jsonl"), unified_train)
     logging.info("Wrote ChartQA train: %d", len(unified_train))
+    if missing_train:
+        logging.warning(
+            "ChartQA train skipped %d/%d samples with missing answers.",
+            missing_train,
+            len(train_records),
+        )
 
     if eval_path and os.path.exists(eval_path):
         eval_records = _read_jsonl(eval_path)
         unified_eval = []
+        missing_eval = 0
         for raw in eval_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-            answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            answer = _extract_answer(raw, "[MISSING_ANSWER]")
+            if answer == "[MISSING_ANSWER]":
+                missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_eval.append(
                 {
@@ -226,6 +274,12 @@ def build_chartqa_unified(
             )
         _write_jsonl(os.path.join(out_dir, "chartqa_unified_val.jsonl"), unified_eval)
         logging.info("Wrote ChartQA val/test: %d", len(unified_eval))
+        if missing_eval:
+            logging.warning(
+                "ChartQA val/test has %d/%d samples with missing answers.",
+                missing_eval,
+                len(eval_records),
+            )
     else:
         logging.warning("ChartQA validation/test file not found; skipping val split.")
 
@@ -250,9 +304,13 @@ def build_infovqa_unified(
     ocr_map = _load_ocr_cache(ocr_cache)
     train_records = _read_jsonl(train_path)
     unified_train = []
+    missing_train = 0
     for raw in train_records:
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-        answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+        answer = _extract_answer(raw, "")
+        if not answer:
+            missing_train += 1
+            continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
         unified_train.append(
             {
@@ -270,13 +328,22 @@ def build_infovqa_unified(
         )
     _write_jsonl(os.path.join(out_dir, "infovqa_unified_train.jsonl"), unified_train)
     logging.info("Wrote InfoVQA train: %d", len(unified_train))
+    if missing_train:
+        logging.warning(
+            "InfoVQA train skipped %d/%d samples with missing answers.",
+            missing_train,
+            len(train_records),
+        )
 
     if eval_path and os.path.exists(eval_path):
         eval_records = _read_jsonl(eval_path)
         unified_eval = []
+        missing_eval = 0
         for raw in eval_records:
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-            answer = _normalize_answer(raw.get("answer", ""), "[MISSING_ANSWER]")
+            answer = _extract_answer(raw, "[MISSING_ANSWER]")
+            if answer == "[MISSING_ANSWER]":
+                missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
             unified_eval.append(
                 {
@@ -299,6 +366,12 @@ def build_infovqa_unified(
         )
         _write_jsonl(os.path.join(out_dir, out_name), unified_eval)
         logging.info("Wrote InfoVQA eval: %s (%d)", out_name, len(unified_eval))
+        if missing_eval:
+            logging.warning(
+                "InfoVQA eval has %d/%d samples with missing answers.",
+                missing_eval,
+                len(eval_records),
+            )
     else:
         logging.warning("InfoVQA eval file not found; skipping val/test split.")
 

@@ -58,13 +58,20 @@ def _normalize_text(value: Any, fallback: str) -> str:
 def _normalize_answer(value: Any) -> str:
     if value is None:
         return ""
+    if isinstance(value, dict):
+        for key in ("answer", "answers", "label", "text"):
+            if key in value and value[key] not in (None, ""):
+                value = value[key]
+                break
     if isinstance(value, list):
         value = value[0] if value else ""
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text"):
-            if key in value and value[key]:
+            if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
+        if isinstance(value, list):
+            value = value[0] if value else ""
     return str(value).strip()
 
 
