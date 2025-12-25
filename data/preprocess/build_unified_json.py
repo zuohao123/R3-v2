@@ -260,6 +260,7 @@ def build_screenqa_unified(
     ocr_map = _load_ocr_cache(ocr_cache)
     suffix = _shard_suffix(num_shards, shard_id)
     train_records, train_total = _read_jsonl_shard(train_path, num_shards, shard_id)
+    train_records = train_records[:2]
     unified_train = []
     missing_train = 0
     for idx, raw in enumerate(train_records):
