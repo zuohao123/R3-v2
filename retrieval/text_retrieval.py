@@ -2,9 +2,40 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+
+_OCR_RE = re.compile(r"(?:^|\\b)OCR\\s*:\\s*(.*)$", re.IGNORECASE)
+
+
+def _extract_ocr_text(record: Dict[str, Any]) -> str:
+    text = str(record.get("ocr_text", "") or "").strip()
+    if text:
+        return text
+    pseudo = str(record.get("pseudo_text", "") or "").strip()
+    if not pseudo:
+        return ""
+    match = _OCR_RE.search(pseudo)
+    return match.group(1).strip() if match else ""
+
+
+def _select_text(record: Dict[str, Any], text_field: str) -> str:
+    field = text_field.lower()
+    if field == "ocr":
+        return _extract_ocr_text(record)
+    if field == "question":
+        return str(record.get("question", "") or "").strip()
+    if field == "pseudo_text":
+        return str(record.get("pseudo_text", "") or "").strip()
+    text = _extract_ocr_text(record)
+    if text:
+        return text
+    text = str(record.get("pseudo_text", "") or "").strip()
+    if text:
+        return text
+    return str(record.get("question", "") or "").strip()
 
 from retrieval.vector_store import FaissVectorStore
 
@@ -46,6 +77,7 @@ class TextRetriever:
         meta_path: str,
         embeds_path: str,
         max_samples: Optional[int] = None,
+        text_field: str = "auto",
     ) -> None:
         self._ensure_model()
         records = []
@@ -57,16 +89,18 @@ class TextRetriever:
                 if max_samples is not None and len(records) >= max_samples:
                     break
 
-        texts = [record.get("pseudo_text", "") for record in records]
+        texts = [_select_text(record, text_field) for record in records]
         embeddings = self.encode_texts(texts)
         metadata = [
             {
                 "image_path": record.get("image_path", ""),
-                "pseudo_text": record.get("pseudo_text", ""),
+                "pseudo_text": text,
+                "full_pseudo_text": record.get("pseudo_text", ""),
+                "ocr_text": record.get("ocr_text", ""),
                 "question": record.get("question", ""),
                 "answer": record.get("answer", ""),
             }
-            for record in records
+            for record, text in zip(records, texts)
         ]
         store = FaissVectorStore(dim=embeddings.shape[1], normalize=True)
         store.add(embeddings, metadata)

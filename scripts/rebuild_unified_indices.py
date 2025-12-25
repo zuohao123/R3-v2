@@ -53,6 +53,7 @@ def _run_build_indices(
     merge_shards: Optional[int],
     device: Optional[str],
     log_every: int,
+    text_field: str,
 ) -> None:
     import scripts.build_indices as build_indices
 
@@ -75,6 +76,8 @@ def _run_build_indices(
             str(num_shards),
             "--log_every",
             str(log_every),
+            "--text_field",
+            text_field,
         ]
         if shard_id is not None:
             argv += ["--shard_id", str(shard_id)]
@@ -103,6 +106,12 @@ def main() -> None:
     parser.add_argument("--chartqa_ocr", default=None)
     parser.add_argument("--infovqa_ocr", default=None)
     parser.add_argument("--ocr_max_chars", type=int, default=1200)
+    parser.add_argument(
+        "--text_field",
+        default="ocr",
+        choices=["auto", "ocr", "pseudo_text", "question"],
+        help="Which text to index for retrieval (recommended: ocr).",
+    )
     parser.add_argument("--image_encoder", default="models/clip-vit-b32-laion2B")
     parser.add_argument("--text_encoder", default="models/all-MiniLM-L6-v2")
     parser.add_argument("--batch_size", type=int, default=16)
@@ -205,6 +214,7 @@ def main() -> None:
         merge_shards=args.merge_shards,
         device=args.device,
         log_every=args.log_every,
+        text_field=args.text_field,
     )
 
 

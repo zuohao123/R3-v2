@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -59,10 +60,44 @@ def _get_shard_id(shard_id: Optional[int]) -> int:
     return int(env_rank)
 
 
-def _collect_metadata(record: Dict[str, Any]) -> Dict[str, Any]:
+_OCR_RE = re.compile(r"(?:^|\\b)OCR\\s*:\\s*(.*)$", re.IGNORECASE)
+
+
+def _extract_ocr_text(record: Dict[str, Any]) -> str:
+    text = str(record.get("ocr_text", "") or "").strip()
+    if text:
+        return text
+    pseudo = str(record.get("pseudo_text", "") or "").strip()
+    if not pseudo:
+        return ""
+    match = _OCR_RE.search(pseudo)
+    return match.group(1).strip() if match else ""
+
+
+def _select_text(record: Dict[str, Any], text_field: str) -> str:
+    field = text_field.lower()
+    if field == "ocr":
+        return _extract_ocr_text(record)
+    if field == "question":
+        return str(record.get("question", "") or "").strip()
+    if field == "pseudo_text":
+        return str(record.get("pseudo_text", "") or "").strip()
+    # auto
+    text = _extract_ocr_text(record)
+    if text:
+        return text
+    text = str(record.get("pseudo_text", "") or "").strip()
+    if text:
+        return text
+    return str(record.get("question", "") or "").strip()
+
+
+def _collect_metadata(record: Dict[str, Any], retrieval_text: str) -> Dict[str, Any]:
     return {
         "image_path": record.get("image_path", ""),
-        "pseudo_text": record.get("pseudo_text", ""),
+        "pseudo_text": retrieval_text,
+        "full_pseudo_text": record.get("pseudo_text", ""),
+        "ocr_text": record.get("ocr_text", ""),
         "question": record.get("question", ""),
         "answer": record.get("answer", ""),
     }
@@ -78,6 +113,7 @@ def _build_shard(
     device: Optional[str],
     shard_id: int,
     log_every: int,
+    text_field: str,
 ) -> None:
     shard_dir = os.path.join(out_dir, "shards")
     os.makedirs(shard_dir, exist_ok=True)
@@ -90,10 +126,10 @@ def _build_shard(
     # Text embeddings
     text_retriever = TextRetriever(text_encoder, device=device)
     text_records = records
-    text_meta = [_collect_metadata(r) for r in text_records]
+    text_texts = [_select_text(r, text_field) for r in text_records]
+    text_meta = [_collect_metadata(r, t) for r, t in zip(text_records, text_texts)]
     if text_records:
-        texts = [r.get("pseudo_text", "") for r in text_records]
-        text_embeds = text_retriever.encode_texts(texts, batch_size=batch_size)
+        text_embeds = text_retriever.encode_texts(text_texts, batch_size=batch_size)
         text_embeds_path = os.path.join(shard_dir, f"text.embeds.{shard_id}.npy")
         text_meta_path = os.path.join(shard_dir, f"text.meta.{shard_id}.json")
         np.save(text_embeds_path, text_embeds)
@@ -116,7 +152,8 @@ def _build_shard(
         except (FileNotFoundError, OSError):
             continue
         images.append(image)
-        image_meta.append(_collect_metadata(record))
+        retrieval_text = _select_text(record, text_field)
+        image_meta.append(_collect_metadata(record, retrieval_text))
         if len(images) >= batch_size:
             embeds = image_retriever.encode_images(images)
             image_embeds_list.append(embeds)
@@ -179,6 +216,12 @@ def main() -> None:
     parser.add_argument("--out_dir", default="indices", help="Output directory for indices")
     parser.add_argument("--image_encoder", default="models/clip-vit-b32-laion2B")
     parser.add_argument("--text_encoder", default="sentence-transformers/all-MiniLM-L6-v2")
+    parser.add_argument(
+        "--text_field",
+        default="auto",
+        choices=["auto", "ocr", "pseudo_text", "question"],
+        help="Which text to index for retrieval (recommended: ocr).",
+    )
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_shards", type=int, default=1)
     parser.add_argument("--shard_id", type=int, default=None)
@@ -216,6 +259,7 @@ def main() -> None:
             device=args.device,
             shard_id=shard_id,
             log_every=args.log_every,
+            text_field=args.text_field,
         )
         return
 
@@ -236,6 +280,7 @@ def main() -> None:
         index_path=os.path.join(args.out_dir, "text.index"),
         meta_path=os.path.join(args.out_dir, "text.meta.json"),
         embeds_path=os.path.join(args.out_dir, "text.embeds.npy"),
+        text_field=args.text_field,
     )
 
     logging.info("Indices saved to %s", args.out_dir)

@@ -178,7 +178,8 @@ cat data/unified/screenqa_unified_val.jsonl \
 python scripts/build_indices.py \
   --jsonl data/unified/train.jsonl \
   --image_root data/raw \
-  --out_dir indices
+  --out_dir indices \
+  --text_field ocr
 ```
 
 ## 4b) Build Retrieval Indices (Multi-GPU Sharding)
@@ -189,7 +190,8 @@ torchrun --nproc_per_node=8 scripts/build_indices.py \
   --image_root data/raw \
   --out_dir indices \
   --num_shards 8 \
-  --batch_size 32
+  --batch_size 32 \
+  --text_field ocr
 
 python scripts/build_indices.py --out_dir indices --merge_shards 8
 ```

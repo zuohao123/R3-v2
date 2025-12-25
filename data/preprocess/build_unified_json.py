@@ -137,6 +137,7 @@ def build_screenqa_unified(
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
+                "ocr_text": ocr_text,
                 "pseudo_text": _compose_pseudo_text(
                     "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
                 ),
@@ -157,6 +158,7 @@ def build_screenqa_unified(
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
+                    "ocr_text": ocr_text,
                     "pseudo_text": _compose_pseudo_text(
                         "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
                     ),
@@ -197,6 +199,7 @@ def build_chartqa_unified(
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
+                "ocr_text": ocr_text,
                 "pseudo_text": _compose_pseudo_text("CHARTQA_CONTEXT", question, ocr_text),
             }
         )
@@ -215,6 +218,7 @@ def build_chartqa_unified(
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
+                    "ocr_text": ocr_text,
                     "pseudo_text": _compose_pseudo_text(
                         "CHARTQA_CONTEXT", question, ocr_text
                     ),
@@ -255,6 +259,7 @@ def build_infovqa_unified(
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
+                "ocr_text": ocr_text,
                 "pseudo_text": _compose_pseudo_text(
                     "INFOVQA_CONTEXT",
                     question,
@@ -278,6 +283,7 @@ def build_infovqa_unified(
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
+                    "ocr_text": ocr_text,
                     "pseudo_text": _compose_pseudo_text(
                         "INFOVQA_CONTEXT",
                         question,
