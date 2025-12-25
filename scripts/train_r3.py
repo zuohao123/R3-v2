@@ -42,6 +42,11 @@ def main() -> None:
         help="Temperature sampling alpha in [0,1]; smaller = more balanced",
     )
     parser.add_argument("--use_lora", action="store_true")
+    parser.add_argument(
+        "--lora_targets",
+        default=None,
+        help="Comma-separated target modules for LoRA (e.g., q_proj,k_proj,v_proj,o_proj)",
+    )
     parser.add_argument("--bf16", action="store_true")
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--index_dir", default="indices")
@@ -92,6 +97,10 @@ def main() -> None:
     cfg.training.gradient_checkpointing = args.gradient_checkpointing
     cfg.training.sampling_alpha = args.sampling_alpha
     cfg.model.use_lora = args.use_lora
+    if args.lora_targets:
+        cfg.model.lora_target_modules = [
+            name.strip() for name in args.lora_targets.split(",") if name.strip()
+        ]
     cfg.training.bf16 = args.bf16 or cfg.training.bf16
     cfg.training.fp16 = args.fp16
     if args.fp16:
