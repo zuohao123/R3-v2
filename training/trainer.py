@@ -393,10 +393,16 @@ class Trainer:
         sharding = sharding_map.get(self.config.training.fsdp_sharding, ShardingStrategy.FULL_SHARD)
         auto_wrap_policy = None
         if self.config.training.fsdp_min_num_params > 0:
-            auto_wrap_policy = functools.partial(
-                size_based_auto_wrap_policy,
-                min_num_params=self.config.training.fsdp_min_num_params,
-            )
+            if self.config.r3.use_soft_prefix:
+                if self.is_main_process:
+                    logging.warning(
+                        "Disabling FSDP auto-wrap because soft-prefix uses embedding module directly."
+                    )
+            else:
+                auto_wrap_policy = functools.partial(
+                    size_based_auto_wrap_policy,
+                    min_num_params=self.config.training.fsdp_min_num_params,
+                )
         self.qwen.model = FSDP(
             self.qwen.model,
             mixed_precision=mp_policy,
