@@ -54,16 +54,13 @@ def _ensure_text(value: Any, fallback: str) -> str:
 def _normalize_answer(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
-    print(f"1value: {value}")
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text", "full_answer", "ground_truth"):
             if key in value and value[key] not in (None, ""):
                 value = value[key]
                 break
-    print(f"2value: {value}")
     if isinstance(value, list):
         value = value[0] if value else fallback
-    print(f"3value: {value}")
     if isinstance(value, dict):
         for key in ("answer", "answers", "label", "text", "full_answer", "ground_truth"):
             if key in value and value[key] not in (None, ""):
@@ -71,7 +68,6 @@ def _normalize_answer(value: Any, fallback: str) -> str:
                 break
         if isinstance(value, list):
             value = value[0] if value else fallback
-    print(f"4value: {value}")
     text = str(value).strip()
     return text if text else fallback
 
@@ -92,61 +88,6 @@ def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
             if value != fallback:
                 return value
     return fallback
-
-
-def _summarize_value(value: Any, max_chars: int) -> Any:
-    if isinstance(value, str):
-        if max_chars > 0 and len(value) > max_chars:
-            return value[:max_chars] + "..."
-        return value
-    if isinstance(value, dict):
-        summary: Dict[str, Any] = {}
-        for key, val in value.items():
-            summary[key] = _summarize_value(val, max_chars)
-            if len(summary) >= 6:
-                summary["..."] = "..."
-                break
-        return summary
-    if isinstance(value, list):
-        if not value:
-            return []
-        return [_summarize_value(value[0], max_chars)]
-    return value
-
-
-def _summarize_record(record: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {}
-    for key, value in record.items():
-        if key.lower() in {"image", "image_bytes"}:
-            continue
-        summary[key] = _summarize_value(value, max_chars)
-        if len(summary) >= 10:
-            summary["..."] = "..."
-            break
-    return summary
-
-
-def _extract_answer_debug(
-    raw: Dict[str, Any], fallback: str
-) -> tuple[str, Optional[str], List[Dict[str, Any]]]:
-    candidates: List[Dict[str, Any]] = []
-    for key in (
-        "answer",
-        "answers",
-        "label",
-        "gt_answer",
-        "answer_text",
-        "full_answer",
-        "ground_truth",
-        "text",
-    ):
-        if key not in raw or raw[key] in (None, ""):
-            continue
-        normalized = _normalize_answer(raw[key], fallback)
-        candidates.append({"key": key, "normalized": normalized, "raw_type": type(raw[key]).__name__})
-        if normalized != fallback:
-            return normalized, key, candidates
-    return fallback, None, candidates
 
 
 def _first_existing(paths: List[str]) -> Optional[str]:
@@ -244,8 +185,6 @@ def build_screenqa_unified(
     num_shards: int = 1,
     shard_id: int = 0,
     log_every: int = 0,
-    debug_samples: int = 0,
-    debug_max_chars: int = 240,
 ) -> None:
     """Convert ScreenQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "screenqa_raw_train.jsonl")
@@ -260,28 +199,11 @@ def build_screenqa_unified(
     ocr_map = _load_ocr_cache(ocr_cache)
     suffix = _shard_suffix(num_shards, shard_id)
     train_records, train_total = _read_jsonl_shard(train_path, num_shards, shard_id)
-    train_records = train_records[:2]
     unified_train = []
     missing_train = 0
     for idx, raw in enumerate(train_records):
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
-        print(f"raw:{raw}")
         answer = _extract_answer(raw, "")
-        print(f"answer:{answer}")
-        if debug_samples > 0 and idx < debug_samples:
-            dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-            logging.info(
-                "DEBUG ScreenQA train idx %d raw=%s",
-                idx,
-                _summarize_record(raw, debug_max_chars),
-            )
-            logging.info(
-                "DEBUG ScreenQA train idx %d answer_candidates=%s selected_key=%s final=%s",
-                idx,
-                dbg_candidates,
-                dbg_key,
-                _summarize_value(dbg_answer, debug_max_chars),
-            )
         if not answer:
             missing_train += 1
             continue
@@ -321,20 +243,6 @@ def build_screenqa_unified(
         for idx, raw in enumerate(val_records):
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _extract_answer(raw, "[MISSING_ANSWER]")
-            if debug_samples > 0 and idx < debug_samples:
-                dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-                logging.info(
-                    "DEBUG ScreenQA val idx %d raw=%s",
-                    idx,
-                    _summarize_record(raw, debug_max_chars),
-                )
-                logging.info(
-                    "DEBUG ScreenQA val idx %d answer_candidates=%s selected_key=%s final=%s",
-                    idx,
-                    dbg_candidates,
-                    dbg_key,
-                    _summarize_value(dbg_answer, debug_max_chars),
-                )
             if answer == "[MISSING_ANSWER]":
                 missing_val += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
@@ -378,8 +286,6 @@ def build_chartqa_unified(
     num_shards: int = 1,
     shard_id: int = 0,
     log_every: int = 0,
-    debug_samples: int = 0,
-    debug_max_chars: int = 240,
 ) -> None:
     """Convert ChartQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "chartqa_raw_train.jsonl")
@@ -399,20 +305,6 @@ def build_chartqa_unified(
     for idx, raw in enumerate(train_records):
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
         answer = _extract_answer(raw, "")
-        if debug_samples > 0 and idx < debug_samples:
-            dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-            logging.info(
-                "DEBUG ChartQA train idx %d raw=%s",
-                idx,
-                _summarize_record(raw, debug_max_chars),
-            )
-            logging.info(
-                "DEBUG ChartQA train idx %d answer_candidates=%s selected_key=%s final=%s",
-                idx,
-                dbg_candidates,
-                dbg_key,
-                _summarize_value(dbg_answer, debug_max_chars),
-            )
         if not answer:
             missing_train += 1
             continue
@@ -450,20 +342,6 @@ def build_chartqa_unified(
         for idx, raw in enumerate(eval_records):
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _extract_answer(raw, "[MISSING_ANSWER]")
-            if debug_samples > 0 and idx < debug_samples:
-                dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-                logging.info(
-                    "DEBUG ChartQA val/test idx %d raw=%s",
-                    idx,
-                    _summarize_record(raw, debug_max_chars),
-                )
-                logging.info(
-                    "DEBUG ChartQA val/test idx %d answer_candidates=%s selected_key=%s final=%s",
-                    idx,
-                    dbg_candidates,
-                    dbg_key,
-                    _summarize_value(dbg_answer, debug_max_chars),
-                )
             if answer == "[MISSING_ANSWER]":
                 missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
@@ -507,8 +385,6 @@ def build_infovqa_unified(
     num_shards: int = 1,
     shard_id: int = 0,
     log_every: int = 0,
-    debug_samples: int = 0,
-    debug_max_chars: int = 240,
 ) -> None:
     """Convert InfoVQA raw JSONL files into unified JSONL format."""
     train_path = os.path.join(raw_dir, "infovqa_raw_train.jsonl")
@@ -528,20 +404,6 @@ def build_infovqa_unified(
     for idx, raw in enumerate(train_records):
         question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
         answer = _extract_answer(raw, "")
-        if debug_samples > 0 and idx < debug_samples:
-            dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-            logging.info(
-                "DEBUG InfoVQA train idx %d raw=%s",
-                idx,
-                _summarize_record(raw, debug_max_chars),
-            )
-            logging.info(
-                "DEBUG InfoVQA train idx %d answer_candidates=%s selected_key=%s final=%s",
-                idx,
-                dbg_candidates,
-                dbg_key,
-                _summarize_value(dbg_answer, debug_max_chars),
-            )
         if not answer:
             missing_train += 1
             continue
@@ -584,20 +446,6 @@ def build_infovqa_unified(
         for idx, raw in enumerate(eval_records):
             question = _ensure_text(raw.get("question", ""), "[MISSING_QUESTION]")
             answer = _extract_answer(raw, "[MISSING_ANSWER]")
-            if debug_samples > 0 and idx < debug_samples:
-                dbg_answer, dbg_key, dbg_candidates = _extract_answer_debug(raw, "[MISSING_ANSWER]")
-                logging.info(
-                    "DEBUG InfoVQA eval idx %d raw=%s",
-                    idx,
-                    _summarize_record(raw, debug_max_chars),
-                )
-                logging.info(
-                    "DEBUG InfoVQA eval idx %d answer_candidates=%s selected_key=%s final=%s",
-                    idx,
-                    dbg_candidates,
-                    dbg_key,
-                    _summarize_value(dbg_answer, debug_max_chars),
-                )
             if answer == "[MISSING_ANSWER]":
                 missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
@@ -654,8 +502,6 @@ def main() -> None:
     )
     parser.add_argument("--ocr_cache", default=None, help="Optional OCR cache JSONL path")
     parser.add_argument("--ocr_max_chars", type=int, default=1200)
-    parser.add_argument("--debug_samples", type=int, default=0)
-    parser.add_argument("--debug_max_chars", type=int, default=240)
     parser.add_argument("--num_shards", type=int, default=1)
     parser.add_argument("--shard_id", type=int, default=0)
     parser.add_argument("--merge_shards", type=int, default=0)
@@ -695,8 +541,6 @@ def main() -> None:
             num_shards=args.num_shards,
             shard_id=args.shard_id,
             log_every=args.log_every,
-            debug_samples=args.debug_samples,
-            debug_max_chars=args.debug_max_chars,
         )
     elif args.dataset == "chartqa":
         build_chartqa_unified(
@@ -708,8 +552,6 @@ def main() -> None:
             num_shards=args.num_shards,
             shard_id=args.shard_id,
             log_every=args.log_every,
-            debug_samples=args.debug_samples,
-            debug_max_chars=args.debug_max_chars,
         )
     else:
         build_infovqa_unified(
@@ -721,8 +563,6 @@ def main() -> None:
             num_shards=args.num_shards,
             shard_id=args.shard_id,
             log_every=args.log_every,
-            debug_samples=args.debug_samples,
-            debug_max_chars=args.debug_max_chars,
         )
 
 
