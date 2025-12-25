@@ -261,6 +261,7 @@ class QwenVLWrapper:
                 full_texts = [f"{p} {a}" for p, a in zip(prompts, answers)]
             else:
                 full_texts = prompts
+
         inputs = self.processor(
             images=images,
             text=full_texts,
@@ -270,8 +271,24 @@ class QwenVLWrapper:
             return_tensors="pt",
         )
         if answers is not None:
-            labels = self._build_labels(prompts, full_texts, max_length=max_length)
-            inputs["labels"] = labels
+            if hasattr(self.processor, "apply_chat_template"):
+                labels = inputs["input_ids"].clone()
+                prompt_ids = self.processor(
+                    images=images,
+                    text=prompts,
+                    padding=True,
+                    truncation=True,
+                    max_length=max_length,
+                    return_tensors="pt",
+                )["input_ids"]
+                pad_id = self.processor.tokenizer.pad_token_id or 0
+                for i in range(labels.size(0)):
+                    prompt_len = (prompt_ids[i] != pad_id).sum().item()
+                    labels[i, :prompt_len] = -100
+                inputs["labels"] = labels
+            else:
+                labels = self._build_labels(prompts, full_texts, max_length=max_length)
+                inputs["labels"] = labels
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         return inputs
 
