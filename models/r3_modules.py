@@ -488,6 +488,8 @@ class R3(nn.Module):
             vis_feat = self._sanitize(vis_feat)
             if self.gate is not None:
                 gates = self.gate(mem_t, mem_i, vis_feat)
+                gates = self._sanitize(gates, fill=0.0)
+                gates = torch.softmax(gates, dim=-1)
                 gates = self._sanitize(gates, fill=1.0 / 3)
                 gates = gates / gates.sum(dim=-1, keepdim=True).clamp_min(1e-6)
             else:
@@ -611,6 +613,8 @@ class R3(nn.Module):
         vis_feat = self._sanitize(vis_feat)
         if self.gate is not None:
             gates = self.gate(mem_t, mem_i, vis_feat)
+            gates = self._sanitize(gates, fill=0.0)
+            gates = torch.softmax(gates, dim=-1)
             gates = self._sanitize(gates, fill=1.0 / 3)
             gates = gates / gates.sum(dim=-1, keepdim=True).clamp_min(1e-6)
         else:
