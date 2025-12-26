@@ -627,7 +627,9 @@ class Trainer:
         self.qwen.model.eval()
         self.r3.eval()
         if self.distributed and self.config.training.distributed_backend == "fsdp":
-            with FSDP.summon_full_params(self.qwen.model, rank0_only=True):
+            with FSDP.summon_full_params(
+                self.qwen.model, rank0_only=True, writeback=False
+            ):
                 if not self.is_main_process:
                     self.qwen.model.train()
                     self.r3.train()
