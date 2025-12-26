@@ -647,9 +647,16 @@ class Trainer:
         self.last_grad_max_abs = float(max_abs)
         if bad_params:
             self.last_bad_params = bad_params
-        self.last_bad_in_memory_only = bool(bad_params_full) and all(
-            name.startswith("memory_aligner") for name in bad_params_full
-        )
+        if bad_params_full:
+            aux_only = True
+            for name in bad_params_full:
+                if "memory_aligner" in name or "latent_tokens" in name:
+                    continue
+                aux_only = False
+                break
+            self.last_bad_in_aux_only = aux_only
+        else:
+            self.last_bad_in_aux_only = False
         return {"grad_nonfinite": float(nonfinite), "grad_max_abs": float(max_abs)}
 
     @staticmethod
@@ -890,13 +897,17 @@ class Trainer:
                             dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
                             skip_step = bool(skip_tensor.item() > 0)
                         if skip_step and self.config.training.skip_nonfinite_grads:
-                            if getattr(self, "last_bad_in_memory_only", False):
+                            if getattr(self, "last_bad_in_aux_only", False):
                                 if self.is_main_process:
                                     logging.warning(
-                                        "Non-finite grads in memory_aligner; zeroing and continuing."
+                                        "Non-finite grads in memory_aligner/latent_tokens; zeroing and continuing."
                                     )
                                 if self.r3.memory_aligner is not None:
                                     for param in self.r3.memory_aligner.parameters():
+                                        if param.grad is not None:
+                                            param.grad.data = torch.zeros_like(param.grad.data)
+                                if self.r3.latent_tokens is not None:
+                                    for param in self.r3.latent_tokens.parameters():
                                         if param.grad is not None:
                                             param.grad.data = torch.zeros_like(param.grad.data)
                                 with torch.no_grad():
