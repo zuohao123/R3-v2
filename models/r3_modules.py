@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image, ImageFilter
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from config.train_config import R3Config
@@ -147,13 +148,23 @@ class MemoryAligner(nn.Module):
         if text_weights is None:
             pooled_text = text_embeds.mean(dim=1)
         else:
+            text_weights = torch.nan_to_num(
+                text_weights, nan=0.0, posinf=0.0, neginf=0.0
+            )
             text_weights = text_weights / text_weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
             pooled_text = (text_embeds * text_weights.unsqueeze(-1)).sum(dim=1)
         if image_weights is None:
             pooled_image = image_embeds.mean(dim=1)
         else:
+            image_weights = torch.nan_to_num(
+                image_weights, nan=0.0, posinf=0.0, neginf=0.0
+            )
             image_weights = image_weights / image_weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
             pooled_image = (image_embeds * image_weights.unsqueeze(-1)).sum(dim=1)
+        pooled_text = torch.nan_to_num(pooled_text, nan=0.0, posinf=0.0, neginf=0.0)
+        pooled_image = torch.nan_to_num(pooled_image, nan=0.0, posinf=0.0, neginf=0.0)
+        pooled_text = pooled_text.clamp(-5.0, 5.0)
+        pooled_image = pooled_image.clamp(-5.0, 5.0)
         mem_t = torch.tanh(self.text_proj(pooled_text))
         mem_i = torch.tanh(self.image_proj(pooled_image))
         return mem_t, mem_i
@@ -425,6 +436,8 @@ class R3(nn.Module):
 
             text_embeds = self._sanitize(text_embeds)
             image_embeds = self._sanitize(image_embeds)
+            text_embeds = F.normalize(text_embeds, dim=-1, eps=1e-6).detach()
+            image_embeds = F.normalize(image_embeds, dim=-1, eps=1e-6).detach()
             text_weights = (
                 self._score_weights(text_scores, top_k, self.config.min_text_score)
                 if text_scores is not None
@@ -565,6 +578,8 @@ class R3(nn.Module):
         image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)
         text_embeds = self._sanitize(text_embeds)
         image_embeds = self._sanitize(image_embeds)
+        text_embeds = F.normalize(text_embeds, dim=-1, eps=1e-6).detach()
+        image_embeds = F.normalize(image_embeds, dim=-1, eps=1e-6).detach()
         text_weights = (
             self._score_weights(text_scores, top_k, self.config.min_text_score)
             if text_scores is not None
