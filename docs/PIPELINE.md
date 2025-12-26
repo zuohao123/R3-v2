@@ -483,6 +483,182 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
+### Background Execution (nohup)
+
+If you want to run the staged jobs in the background, use `nohup` and write logs to `logs/`.
+Below are ready-to-run background variants for each stage (same arguments as above).
+
+```bash
+mkdir -p logs
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage0 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 2 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 1000 --save_every 1000 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --disable_corruption --disable_text_retrieval --disable_image_retrieval \
+  --disable_prefix --disable_memory --disable_visual_memory --disable_latent_tokens \
+  --disable_gate --disable_context \
+  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --r3_fp32 > logs/stage0.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage1 \
+  --resume_from checkpoints/stage0/step_1000 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 2 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 1000 --save_every 1000 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --disable_corruption \
+  --disable_prefix --disable_visual_memory --disable_latent_tokens --disable_gate --disable_context \
+  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
+  --r3_lr_mult 0.5 \
+  --r3_fp32 > logs/stage1.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage2_text \
+  --resume_from checkpoints/stage1/step_1000 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 2 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --loss_scale 64 \
+  --r3_lr_mult 0.5 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 1000 --save_every 1000 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --disable_corruption \
+  --disable_image_retrieval --disable_visual_memory \
+  --disable_memory --disable_gate --disable_context \
+  --disable_latent_tokens \
+  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --r3_fp32 > logs/stage2_text.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage3_image \
+  --resume_from checkpoints/stage2_text/step_1000 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 2 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --loss_scale 32 \
+  --r3_lr_mult 0.1 \
+  --max_grad_norm 0.5 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 500 --save_every 500 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --sampling_alpha 0.5 \
+  --disable_corruption \
+  --disable_text_retrieval --disable_prefix \
+  --disable_memory --disable_gate --disable_context \
+  --disable_latent_tokens \
+  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --visual_memory_len 1 \
+  --r3_fp32 > logs/stage3a_image.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage3_image \
+  --resume_from checkpoints/stage3_image/step_500 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 4 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --loss_scale 64 \
+  --r3_lr_mult 0.3 \
+  --max_grad_norm 0.5 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 1500 --save_every 1500 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --sampling_alpha 0.5 \
+  --disable_corruption \
+  --disable_text_retrieval --disable_prefix \
+  --disable_memory --disable_gate --disable_context \
+  --disable_latent_tokens \
+  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --visual_memory_len 1 \
+  --r3_fp32 > logs/stage3b_image.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage4_joint \
+  --resume_from checkpoints/stage3_image/step_1500 \
+  --fp16 --use_lora --disable_teacher \
+  --batch_size 4 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 2000 --save_every 2000 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --disable_corruption \
+  --disable_latent_tokens \
+  --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
+  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
+  --r3_fp32 > logs/stage4_joint.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage5_full \
+  --resume_from checkpoints/stage4_joint/step_2000 \
+  --fp16 --use_lora \
+  --batch_size 4 --grad_accum 4 \
+  --learning_rate 1e-6 \
+  --max_length 2048 --max_context_chars 128 \
+  --max_steps 10000 --save_every 10000 --eval_every 1000 \
+  --sample_every 0 --num_workers 0 \
+  --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
+  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
+  --max_corruption 1 \
+  --corruption_warmup_steps 2000 \
+  --corruption_total_steps 10000 \
+  --r3_fp32 > logs/stage5_full.log 2>&1 &
+```
+
+To monitor a stage:
+```bash
+tail -f logs/stage5_full.log
+```
+
 ## 6) Evaluate
 
 ```bash

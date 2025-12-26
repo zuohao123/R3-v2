@@ -1092,6 +1092,16 @@ class Trainer:
                 ):
                     self._save_checkpoint(global_step)
 
+                if (
+                    total_steps is not None
+                    and self.config.training.save_every
+                    and global_step + 1 >= total_steps
+                    and (global_step + 1) % self.config.training.save_every != 0
+                ):
+                    # Ensure a final checkpoint is written when the last step
+                    # does not coincide with save_every.
+                    self._save_checkpoint(global_step + 1)
+
                 global_step += 1
 
         if pbar is not None:
