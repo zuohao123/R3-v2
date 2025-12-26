@@ -905,8 +905,13 @@ class Trainer:
                             if getattr(self, "last_bad_in_aux_only", False):
                                 if self.is_main_process:
                                     logging.warning(
-                                        "Non-finite grads in memory_aligner/latent_tokens; zeroing and continuing."
+                                        "Non-finite grads in auxiliary modules; zeroing and continuing."
                                     )
+                                    if self.last_bad_params:
+                                        logging.warning(
+                                            "Non-finite grad params (sample): %s",
+                                            ", ".join(self.last_bad_params),
+                                        )
                                 if self.r3.memory_aligner is not None:
                                     for param in self.r3.memory_aligner.parameters():
                                         if param.grad is not None:
