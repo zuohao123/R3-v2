@@ -177,7 +177,7 @@ class VisualMemoryTokens(nn.Module):
         super().__init__()
         self.memory_len = memory_len
         self.proj = nn.Linear(image_dim, hidden_dim)
-        self.norm = nn.LayerNorm(hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim, eps=1e-5)
         # Small init to stabilize early training for visual memory.
         nn.init.normal_(self.proj.weight, mean=0.0, std=0.02)
         if self.proj.bias is not None:
@@ -193,13 +193,19 @@ class VisualMemoryTokens(nn.Module):
             weights = torch.full(
                 (batch, top_k), 1.0 / top_k, device=image_embeds.device
             )
+        weights = torch.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+        weights = weights.clamp_min(0.0)
         weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-6)
         take = min(self.memory_len, top_k)
         _, indices = torch.topk(weights, k=take, dim=1)
         gather = indices.unsqueeze(-1).expand(-1, -1, dim)
         selected = torch.gather(image_embeds, 1, gather)
         selected_weights = torch.gather(weights, 1, indices)
+        selected = torch.nan_to_num(selected, nan=0.0, posinf=0.0, neginf=0.0)
+        selected = selected.clamp(-5.0, 5.0)
         tokens = self.proj(selected) * selected_weights.unsqueeze(-1)
+        tokens = torch.nan_to_num(tokens, nan=0.0, posinf=0.0, neginf=0.0)
+        tokens = tokens.clamp(-5.0, 5.0)
         if self.memory_len > take:
             pad = torch.zeros(
                 (batch, self.memory_len - take, tokens.size(-1)),

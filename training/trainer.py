@@ -894,15 +894,24 @@ class Trainer:
                         if self.scaler:
                             self.scaler.unscale_(self.optimizer)
                         grad_stats = self._grad_finite_stats()
-                        skip_step = grad_stats["grad_nonfinite"] > 0
+                        local_nonfinite = grad_stats["grad_nonfinite"] > 0
+                        local_nonaux = local_nonfinite and not getattr(
+                            self, "last_bad_in_aux_only", False
+                        )
+                        global_nonfinite = local_nonfinite
+                        global_nonaux = local_nonaux
                         if self.distributed:
-                            skip_tensor = torch.tensor(
-                                1 if skip_step else 0, device=self.device, dtype=torch.int
+                            flags = torch.tensor(
+                                [1 if local_nonfinite else 0, 1 if local_nonaux else 0],
+                                device=self.device,
+                                dtype=torch.int,
                             )
-                            dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
-                            skip_step = bool(skip_tensor.item() > 0)
+                            dist.all_reduce(flags, op=dist.ReduceOp.MAX)
+                            global_nonfinite = bool(flags[0].item() > 0)
+                            global_nonaux = bool(flags[1].item() > 0)
+                        skip_step = global_nonfinite
                         if skip_step and self.config.training.skip_nonfinite_grads:
-                            if getattr(self, "last_bad_in_aux_only", False):
+                            if global_nonfinite and not global_nonaux:
                                 if self.is_main_process:
                                     logging.warning(
                                         "Non-finite grads in auxiliary modules; zeroing and continuing."
