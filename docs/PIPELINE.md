@@ -277,7 +277,7 @@ python -m deepspeed.utils.zero_to_fp32 \
 
 ## 5d) Staged Training (recommended, 8x V100)
 
-Stage 0 (LoRA-only adaptation):
+Stage 0 (LoRA-only adaptation, clean):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -290,7 +290,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 1000 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption --disable_text_retrieval --disable_image_retrieval \
@@ -300,7 +300,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 1 (retrieval alignment warmup):
+Stage 1 (retrieval alignment warmup, text channel):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -314,7 +314,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 1000 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
@@ -324,7 +324,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 2 (text-only):
+Stage 2 (text retrieval + prefix/memory, no image retrieval):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -340,7 +340,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --learning_rate 1e-6 \
   --loss_scale 64 \
   --r3_lr_mult 0.5 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 1000 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
@@ -351,7 +351,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 3-A (image-only warmup):
+Stage 3-A (image-only warmup, visual memory):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -368,7 +368,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --loss_scale 32 \
   --r3_lr_mult 0.1 \
   --max_grad_norm 0.5 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 500 --save_every 500 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --sampling_alpha 0.5 \
@@ -377,10 +377,11 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_memory --disable_gate --disable_context \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --visual_memory_len 1 \
   --r3_fp32
 ```
 
-Stage 3-B (image-only main):
+Stage 3-B (image-only main, visual memory):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -397,7 +398,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --loss_scale 64 \
   --r3_lr_mult 0.3 \
   --max_grad_norm 0.5 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 1500 --save_every 1500 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --sampling_alpha 0.5 \
@@ -406,10 +407,11 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_memory --disable_gate --disable_context \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --visual_memory_len 1 \
   --r3_fp32
 ```
 
-Stage 4 (joint without corruption):
+Stage 4 (joint, clean):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -423,7 +425,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 2000 --save_every 2000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
@@ -433,7 +435,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 5 (full training):
+Stage 5 (full training with strong corruption curriculum):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -447,11 +449,37 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --max_length 4096 --max_context_chars 256 \
+  --max_length 2048 --max_context_chars 128 \
   --max_steps 10000 --save_every 10000 --eval_every 1000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
+  --max_corruption 0.9 \
+  --corruption_warmup_steps 2000 \
+  --corruption_total_steps 10000 \
+  --r3_fp32
+```
+
+Optional (long-context tail, short run):
+```bash
+torchrun --nproc_per_node=8 scripts/train_r3.py \
+  --backend fsdp \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --train_jsonl data/unified/train.jsonl \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --output_dir checkpoints/stage5_full_long \
+  --resume_from checkpoints/stage5_full/step_10000 \
+  --fp16 --use_lora \
+  --batch_size 1 --grad_accum 2 \
+  --learning_rate 5e-7 \
+  --max_length 4096 --max_context_chars 128 \
+  --max_steps 300 --save_every 300 --eval_every 1000000 \
+  --sample_every 0 --num_workers 0 \
+  --max_corruption 0.9 \
+  --corruption_warmup_steps 1 \
+  --corruption_total_steps 300 \
   --r3_fp32
 ```
 

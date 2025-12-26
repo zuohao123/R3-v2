@@ -200,6 +200,11 @@ class Trainer:
             warmup_steps=config.curriculum.warmup_steps,
             total_steps=config.curriculum.total_steps,
         )
+        if config.training.max_steps is not None:
+            if self.curriculum.total_steps <= 0 or self.curriculum.total_steps > config.training.max_steps:
+                self.curriculum.total_steps = config.training.max_steps
+            if self.curriculum.warmup_steps > self.curriculum.total_steps:
+                self.curriculum.warmup_steps = self.curriculum.total_steps
 
         if self.config.training.distributed_backend != "deepspeed":
             base_lr = config.training.learning_rate

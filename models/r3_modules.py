@@ -5,7 +5,7 @@ import contextlib
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -27,6 +27,69 @@ class CorruptionSimulator(nn.Module):
     def _blur(self, image: Image.Image, severity: float) -> Image.Image:
         radius = max(0.1, 2.0 * severity)
         return image.filter(ImageFilter.GaussianBlur(radius=radius))
+
+    def _motion_blur(self, image: Image.Image, severity: float) -> Image.Image:
+        # Use numpy shift-average to avoid Pillow kernel size restrictions.
+        arr = np.asarray(image).astype(np.float32)
+        if arr.ndim == 2:
+            arr = arr[:, :, None]
+        k = 3 + 2 * int(round(severity * 2))
+        k = max(3, min(7, k))
+        axis = 1 if random.random() < 0.5 else 0
+        passes = 2 if severity >= 0.8 else 1
+        for _ in range(passes):
+            acc = np.zeros_like(arr)
+            offsets = range(-(k // 2), k // 2 + 1)
+            for off in offsets:
+                acc += np.roll(arr, off, axis=axis)
+            arr = acc / float(len(list(offsets)))
+        arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+        if arr.shape[2] == 1:
+            arr = arr[:, :, 0]
+        return Image.fromarray(arr)
+
+    def _downsample(self, image: Image.Image, severity: float) -> Image.Image:
+        width, height = image.size
+        scale = max(0.3, 1.0 - 0.6 * severity)
+        new_w = max(1, int(width * scale))
+        new_h = max(1, int(height * scale))
+        small = image.resize((new_w, new_h), resample=Image.BILINEAR)
+        return small.resize((width, height), resample=Image.BILINEAR)
+
+    def _jpeg_compress(self, image: Image.Image, severity: float) -> Image.Image:
+        quality = int(
+            self.config.corruption.jpeg_quality_max
+            - severity
+            * (
+                self.config.corruption.jpeg_quality_max
+                - self.config.corruption.jpeg_quality_min
+            )
+        )
+        quality = max(self.config.corruption.jpeg_quality_min, min(self.config.corruption.jpeg_quality_max, quality))
+        from io import BytesIO
+
+        buf = BytesIO()
+        image.save(buf, format="JPEG", quality=quality)
+        buf.seek(0)
+        return Image.open(buf).convert("RGB")
+
+    def _add_noise(self, image: Image.Image, severity: float) -> Image.Image:
+        arr = np.asarray(image).astype(np.float32) / 255.0
+        sigma = self.config.corruption.noise_std * (0.5 + 0.5 * severity)
+        noise = np.random.normal(0.0, sigma, size=arr.shape).astype(np.float32)
+        arr = np.clip(arr + noise, 0.0, 1.0)
+        return Image.fromarray((arr * 255.0).astype(np.uint8))
+
+    def _color_jitter(self, image: Image.Image, severity: float) -> Image.Image:
+        jitter = self.config.corruption.color_jitter * (0.5 + 0.5 * severity)
+        if jitter <= 0:
+            return image
+        def _jitter_factor() -> float:
+            return max(0.0, 1.0 + random.uniform(-jitter, jitter))
+        image = ImageEnhance.Brightness(image).enhance(_jitter_factor())
+        image = ImageEnhance.Contrast(image).enhance(_jitter_factor())
+        image = ImageEnhance.Color(image).enhance(_jitter_factor())
+        return image
 
     def _occlude(self, image: Image.Image, severity: float) -> Image.Image:
         width, height = image.size
@@ -68,7 +131,11 @@ class CorruptionSimulator(nn.Module):
         return "".join(chars)
 
     def forward(
-        self, images: List[Image.Image], texts: List[str], level: float
+        self,
+        images: List[Image.Image],
+        texts: List[str],
+        level: float,
+        force: bool = False,
     ) -> Tuple[List[Image.Image], List[str], torch.Tensor, torch.Tensor]:
         cfg = self.config.corruption
         corrupted_images: List[Image.Image] = []
@@ -79,22 +146,117 @@ class CorruptionSimulator(nn.Module):
         for image, text in zip(images, texts):
             vis_severity = 0.0
             txt_severity = 0.0
+            applied_vis = False
+            applied_txt = False
             if random.random() < cfg.blur_prob * level:
                 image = self._blur(image, level)
-                vis_severity += 0.3
+                vis_severity += 0.2
+                applied_vis = True
+            if random.random() < cfg.motion_blur_prob * level:
+                image = self._motion_blur(image, level)
+                vis_severity += 0.2
+                applied_vis = True
             if random.random() < cfg.occlusion_prob * level:
                 image = self._occlude(image, level)
                 vis_severity += 0.4
+                applied_vis = True
             if random.random() < cfg.crop_prob * level:
                 image = self._crop(image, level)
                 vis_severity += 0.3
+                applied_vis = True
+            if random.random() < cfg.downsample_prob * level:
+                image = self._downsample(image, level)
+                vis_severity += 0.15
+                applied_vis = True
+            if random.random() < cfg.jpeg_prob * level:
+                image = self._jpeg_compress(image, level)
+                vis_severity += 0.15
+                applied_vis = True
+            if random.random() < cfg.noise_prob * level:
+                image = self._add_noise(image, level)
+                vis_severity += 0.2
+                applied_vis = True
+            if random.random() < cfg.color_prob * level:
+                image = self._color_jitter(image, level)
+                vis_severity += 0.1
+                applied_vis = True
 
             if random.random() < cfg.text_trunc_prob * level:
                 text = self._truncate_text(text, level)
                 txt_severity += 0.4
+                applied_txt = True
             if random.random() < cfg.text_noise_prob * level:
                 text = self._add_text_noise(text, level)
                 txt_severity += 0.3
+                applied_txt = True
+
+            if force and level > 0.0:
+                if not applied_vis and (
+                    cfg.blur_prob
+                    + cfg.motion_blur_prob
+                    + cfg.occlusion_prob
+                    + cfg.crop_prob
+                    + cfg.downsample_prob
+                    + cfg.jpeg_prob
+                    + cfg.noise_prob
+                    + cfg.color_prob
+                ) > 0:
+                    choices = [
+                        "blur",
+                        "motion",
+                        "occlude",
+                        "crop",
+                        "downsample",
+                        "jpeg",
+                        "noise",
+                        "color",
+                    ]
+                    weights = [
+                        cfg.blur_prob,
+                        cfg.motion_blur_prob,
+                        cfg.occlusion_prob,
+                        cfg.crop_prob,
+                        cfg.downsample_prob,
+                        cfg.jpeg_prob,
+                        cfg.noise_prob,
+                        cfg.color_prob,
+                    ]
+                    op = random.choices(choices, weights=weights, k=1)[0]
+                    if op == "blur":
+                        image = self._blur(image, level)
+                        vis_severity += 0.2
+                    elif op == "motion":
+                        image = self._motion_blur(image, level)
+                        vis_severity += 0.2
+                    elif op == "occlude":
+                        image = self._occlude(image, level)
+                        vis_severity += 0.4
+                    else:
+                        if op == "crop":
+                            image = self._crop(image, level)
+                            vis_severity += 0.3
+                        elif op == "downsample":
+                            image = self._downsample(image, level)
+                            vis_severity += 0.15
+                        elif op == "jpeg":
+                            image = self._jpeg_compress(image, level)
+                            vis_severity += 0.15
+                        elif op == "noise":
+                            image = self._add_noise(image, level)
+                            vis_severity += 0.2
+                        else:
+                            image = self._color_jitter(image, level)
+                            vis_severity += 0.1
+                if not applied_txt and (cfg.text_trunc_prob + cfg.text_noise_prob) > 0:
+                    choices = ["truncate", "noise"]
+                    weights = [cfg.text_trunc_prob, cfg.text_noise_prob]
+                    op = random.choices(choices, weights=weights, k=1)[0]
+                    if op == "truncate":
+                        text = self._truncate_text(text, level)
+                        txt_severity += 0.4
+                    else:
+                        text = self._add_text_noise(text, level)
+                        txt_severity += 0.3
 
             corrupted_images.append(image)
             corrupted_texts.append(text)

@@ -5,9 +5,15 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from typing import List
 
 from PIL import Image
+import numpy as np
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from config.train_config import R3Config
 from models.r3_modules import CorruptionSimulator
@@ -39,13 +45,28 @@ def main() -> None:
         help="Comma-separated corruption levels in [0,1].",
     )
     parser.add_argument("--out_dir", default="outputs/corruption_preview")
+    parser.add_argument(
+        "--force",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Force at least one corruption per modality for preview.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_severity", type=float, default=None)
     parser.add_argument("--blur_prob", type=float, default=None)
+    parser.add_argument("--motion_blur_prob", type=float, default=None)
     parser.add_argument("--occlusion_prob", type=float, default=None)
     parser.add_argument("--crop_prob", type=float, default=None)
+    parser.add_argument("--downsample_prob", type=float, default=None)
+    parser.add_argument("--jpeg_prob", type=float, default=None)
+    parser.add_argument("--noise_prob", type=float, default=None)
+    parser.add_argument("--color_prob", type=float, default=None)
     parser.add_argument("--text_trunc_prob", type=float, default=None)
     parser.add_argument("--text_noise_prob", type=float, default=None)
+    parser.add_argument("--noise_std", type=float, default=None)
+    parser.add_argument("--jpeg_quality_min", type=int, default=None)
+    parser.add_argument("--jpeg_quality_max", type=int, default=None)
+    parser.add_argument("--color_jitter", type=float, default=None)
     parser.add_argument("--disable_image", action="store_true")
     parser.add_argument("--disable_text", action="store_true")
     args = parser.parse_args()
@@ -61,19 +82,42 @@ def main() -> None:
         cfg.corruption.max_severity = args.max_severity
     if args.blur_prob is not None:
         cfg.corruption.blur_prob = args.blur_prob
+    if args.motion_blur_prob is not None:
+        cfg.corruption.motion_blur_prob = args.motion_blur_prob
     if args.occlusion_prob is not None:
         cfg.corruption.occlusion_prob = args.occlusion_prob
     if args.crop_prob is not None:
         cfg.corruption.crop_prob = args.crop_prob
+    if args.downsample_prob is not None:
+        cfg.corruption.downsample_prob = args.downsample_prob
+    if args.jpeg_prob is not None:
+        cfg.corruption.jpeg_prob = args.jpeg_prob
+    if args.noise_prob is not None:
+        cfg.corruption.noise_prob = args.noise_prob
+    if args.color_prob is not None:
+        cfg.corruption.color_prob = args.color_prob
     if args.text_trunc_prob is not None:
         cfg.corruption.text_trunc_prob = args.text_trunc_prob
     if args.text_noise_prob is not None:
         cfg.corruption.text_noise_prob = args.text_noise_prob
+    if args.noise_std is not None:
+        cfg.corruption.noise_std = args.noise_std
+    if args.jpeg_quality_min is not None:
+        cfg.corruption.jpeg_quality_min = args.jpeg_quality_min
+    if args.jpeg_quality_max is not None:
+        cfg.corruption.jpeg_quality_max = args.jpeg_quality_max
+    if args.color_jitter is not None:
+        cfg.corruption.color_jitter = args.color_jitter
 
     if args.disable_image:
         cfg.corruption.blur_prob = 0.0
+        cfg.corruption.motion_blur_prob = 0.0
         cfg.corruption.occlusion_prob = 0.0
         cfg.corruption.crop_prob = 0.0
+        cfg.corruption.downsample_prob = 0.0
+        cfg.corruption.jpeg_prob = 0.0
+        cfg.corruption.noise_prob = 0.0
+        cfg.corruption.color_prob = 0.0
     if args.disable_text:
         cfg.corruption.text_trunc_prob = 0.0
         cfg.corruption.text_noise_prob = 0.0
@@ -90,12 +134,14 @@ def main() -> None:
 
     import random
     random.seed(args.seed)
+    np_seed = args.seed if args.seed is not None else 42
+    np.random.seed(np_seed)
 
     for level in levels:
         level = max(0.0, min(1.0, float(level)))
         effective = level * cfg.corruption.max_severity
         corrupted_images, corrupted_texts, c_vis, c_text = simulator(
-            [image], [text], effective
+            [image], [text], effective, force=args.force
         )
         tag = f"{level:.2f}".replace(".", "_")
         out_image = os.path.join(args.out_dir, f"corrupt_{tag}.png")

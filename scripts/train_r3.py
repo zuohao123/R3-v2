@@ -83,6 +83,9 @@ def main() -> None:
     )
     parser.add_argument("--disable_teacher", action="store_true")
     parser.add_argument("--disable_corruption", action="store_true")
+    parser.add_argument("--max_corruption", type=float, default=None)
+    parser.add_argument("--corruption_warmup_steps", type=int, default=None)
+    parser.add_argument("--corruption_total_steps", type=int, default=None)
     parser.add_argument("--disable_text_retrieval", action="store_true")
     parser.add_argument("--disable_image_retrieval", action="store_true")
     parser.add_argument("--disable_prefix", action="store_true")
@@ -184,6 +187,12 @@ def main() -> None:
     cfg.training.fsdp_sharding = args.fsdp_sharding
     cfg.training.use_teacher = not args.disable_teacher
     cfg.r3.enable_corruption = not args.disable_corruption
+    if args.max_corruption is not None:
+        cfg.curriculum.max_corruption = args.max_corruption
+    if args.corruption_warmup_steps is not None:
+        cfg.curriculum.warmup_steps = args.corruption_warmup_steps
+    if args.corruption_total_steps is not None:
+        cfg.curriculum.total_steps = args.corruption_total_steps
     cfg.r3.enable_text_retrieval = not args.disable_text_retrieval
     cfg.r3.enable_image_retrieval = not args.disable_image_retrieval
     cfg.r3.enable_prefix = not args.disable_prefix

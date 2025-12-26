@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -37,6 +38,7 @@ def _parse_levels(value: str) -> List[float]:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Evaluate R3 or base model")
     parser.add_argument("--checkpoint_dir", default=None)
     parser.add_argument("--val_jsonl", required=True)

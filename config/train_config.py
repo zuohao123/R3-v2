@@ -52,10 +52,19 @@ class CorruptionConfig:
     """Corruption probabilities and severity."""
     max_severity: float = 0.8
     blur_prob: float = 0.3
+    motion_blur_prob: float = 0.15
     occlusion_prob: float = 0.3
     crop_prob: float = 0.3
+    downsample_prob: float = 0.2
+    jpeg_prob: float = 0.2
+    noise_prob: float = 0.2
+    color_prob: float = 0.2
     text_trunc_prob: float = 0.3
     text_noise_prob: float = 0.3
+    noise_std: float = 0.1
+    jpeg_quality_min: int = 30
+    jpeg_quality_max: int = 95
+    color_jitter: float = 0.25
 
 
 @dataclass

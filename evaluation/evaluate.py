@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
+import time
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -177,7 +179,9 @@ def evaluate_model(
     use_pseudo_text: Optional[bool] = None,
     corrupt_text_target: str = "pseudo_text",
     corruptor=None,
+    log_every: Optional[int] = None,
 ) -> Dict[float, Dict[str, float]]:
+    logger = logging.getLogger(__name__)
     results: Dict[float, Dict[str, float]] = {}
     if mode not in {"r3", "base"}:
         raise ValueError(f"Unknown mode: {mode}")
@@ -198,9 +202,27 @@ def evaluate_model(
 
         corruptor = CorruptionSimulator(R3Config())
 
-    for level in corruption_levels:
+    total_levels = len(corruption_levels)
+    for level_idx, level in enumerate(corruption_levels, start=1):
         sums = Counter()
         count = 0
+        try:
+            total_batches = len(dataloader)
+        except TypeError:
+            total_batches = None
+        level_start = time.time()
+        if log_every is None:
+            if total_batches:
+                log_every = max(1, total_batches // 20)
+            else:
+                log_every = 50
+        logger.info(
+            "Eval level %.2f (%d/%d) start | batches %s",
+            level,
+            level_idx,
+            total_levels,
+            total_batches if total_batches is not None else "unknown",
+        )
         for batch in dataloader:
             clean = batch["clean"]
             corrupted = batch["corrupted"]
@@ -234,10 +256,34 @@ def evaluate_model(
             for pred, ref in zip(preds, refs):
                 sums.update(_compute_metrics(pred, ref))
                 count += 1
+            if count % log_every == 0:
+                elapsed = time.time() - level_start
+                eta = None
+                if total_batches:
+                    completed = min(count, total_batches)
+                    eta = elapsed / max(completed, 1) * (total_batches - completed)
+                logger.info(
+                    "Eval level %.2f (%d/%d) | done %s/%s | elapsed %s | eta %s",
+                    level,
+                    level_idx,
+                    total_levels,
+                    count,
+                    total_batches if total_batches is not None else "?",
+                    _format_seconds(elapsed),
+                    _format_seconds(eta) if eta is not None else "n/a",
+                )
         if return_sums:
             results[level] = {"count": float(count), **sums}
         else:
             results[level] = {k: v / max(1.0, count) for k, v in sums.items()}
+        logger.info(
+            "Eval level %.2f (%d/%d) done | samples %d | elapsed %s",
+            level,
+            level_idx,
+            total_levels,
+            count,
+            _format_seconds(time.time() - level_start),
+        )
     return results
 
 
@@ -245,3 +291,14 @@ def save_results(results: Dict[float, Dict[str, float]], out_path: str) -> None:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
+
+
+def _format_seconds(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "n/a"
+    seconds = max(0, int(seconds))
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours > 0:
+        return f"{hours}h{mins:02d}m{secs:02d}s"
+    return f"{mins:02d}m{secs:02d}s"
