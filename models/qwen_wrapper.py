@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from dataclasses import dataclass
 import logging
 from typing import Any, Dict, List, Optional
@@ -97,6 +98,34 @@ class QwenVLWrapper:
         )
         self.model = get_peft_model(self.model, lora_cfg)
         self.model.print_trainable_parameters()
+
+    def load_lora_adapter(self, adapter_dir: str) -> bool:
+        """Load LoRA adapter weights from a checkpoint directory."""
+        if not self.config.use_lora:
+            logging.warning("LoRA is disabled; skipping adapter load.")
+            return False
+        safetensors_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+        bin_path = os.path.join(adapter_dir, "adapter_model.bin")
+        state = None
+        if os.path.exists(safetensors_path):
+            try:
+                from safetensors.torch import load_file  # type: ignore
+            except ImportError as exc:
+                raise RuntimeError("safetensors is required to load LoRA adapter.") from exc
+            state = load_file(safetensors_path)
+        elif os.path.exists(bin_path):
+            state = torch.load(bin_path, map_location="cpu")
+        else:
+            logging.warning("No LoRA adapter found in %s", adapter_dir)
+            return False
+        missing, unexpected = self.model.load_state_dict(state, strict=False)
+        if missing:
+            logging.info("LoRA load missing keys: %s", missing)
+        if unexpected:
+            logging.info("LoRA load unexpected keys: %s", unexpected)
+        if self.teacher is not None:
+            self.teacher.load_state_dict(self.model.state_dict(), strict=False)
+        return True
 
     def _get_input_embeddings(self) -> Optional[torch.nn.Module]:
         try:

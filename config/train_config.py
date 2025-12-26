@@ -140,6 +140,10 @@ class TrainingConfig:
     fsdp_use_orig_params: bool = True
     fsdp_sharding: str = "full"  # "full", "grad", "no_shard"
     use_teacher: bool = True
+    resume_from: Optional[str] = None
+    resume_optimizer: bool = False
+    resume_r3: bool = True
+    resume_lora: bool = True
 
 
 @dataclass

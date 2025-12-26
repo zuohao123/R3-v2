@@ -32,6 +32,8 @@ def main() -> None:
     parser.add_argument("--adam_eps", type=float, default=None)
     parser.add_argument("--grad_accum", type=int, default=1)
     parser.add_argument("--log_every", type=int, default=50)
+    parser.add_argument("--save_every", type=int, default=None)
+    parser.add_argument("--eval_every", type=int, default=None)
     parser.add_argument("--max_grad_norm", type=float, default=None)
     parser.add_argument("--min_label_ratio", type=float, default=None)
     parser.add_argument("--max_length", type=int, default=None)
@@ -99,6 +101,8 @@ def main() -> None:
     parser.add_argument("--disable_score_weighting", action="store_true")
     parser.add_argument("--r3_fp32", action="store_true", help="Run R3 modules in fp32")
     parser.add_argument("--r3_fp16", action="store_true", help="Allow autocast in R3 modules")
+    parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--resume_optimizer", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -118,6 +122,10 @@ def main() -> None:
         cfg.training.adam_eps = args.adam_eps
     cfg.training.gradient_accumulation = args.grad_accum
     cfg.training.log_every = args.log_every
+    if args.save_every is not None:
+        cfg.training.save_every = args.save_every
+    if args.eval_every is not None:
+        cfg.training.eval_every = args.eval_every
     if args.max_grad_norm is not None:
         cfg.training.max_grad_norm = args.max_grad_norm
     if args.min_label_ratio is not None:
@@ -204,6 +212,10 @@ def main() -> None:
         cfg.r3.force_fp32 = False
     if args.r3_fp32:
         cfg.r3.force_fp32 = True
+    if args.resume_from:
+        cfg.training.resume_from = args.resume_from
+    if args.resume_optimizer:
+        cfg.training.resume_optimizer = True
 
     trainer = Trainer(cfg)
     trainer.train()

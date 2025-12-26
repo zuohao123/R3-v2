@@ -187,6 +187,7 @@ class Trainer:
         # Clean any non-finite params (e.g., from resume or prior runs).
         with torch.no_grad():
             self.r3.sanitize_parameters()
+        self._resume_from_checkpoint()
 
         self.engine = None
         if self.config.training.distributed_backend == "fsdp":
@@ -227,6 +228,24 @@ class Trainer:
                 weight_decay=config.training.weight_decay,
                 eps=config.training.adam_eps,
             )
+            if self.config.training.resume_from and self.config.training.resume_optimizer:
+                opt_path = os.path.join(
+                    self.config.training.resume_from, "optimizer.pt"
+                )
+                if os.path.exists(opt_path):
+                    try:
+                        self.optimizer.load_state_dict(
+                            torch.load(opt_path, map_location="cpu")
+                        )
+                        if self.is_main_process:
+                            logging.info("Loaded optimizer state from %s", opt_path)
+                    except Exception as exc:
+                        if self.is_main_process:
+                            logging.warning(
+                                "Failed to load optimizer state from %s: %s",
+                                opt_path,
+                                exc,
+                            )
         else:
             self.optimizer = None
 
@@ -493,6 +512,38 @@ class Trainer:
         self.engine = engine
         self.optimizer = optimizer
 
+    def _resume_from_checkpoint(self) -> None:
+        resume_dir = self.config.training.resume_from
+        if not resume_dir:
+            return
+        if not os.path.isdir(resume_dir):
+            if self.is_main_process:
+                logging.warning("Resume path %s is not a directory.", resume_dir)
+            return
+        if self.config.model.use_lora and self.config.training.resume_lora:
+            try:
+                loaded = self.qwen.load_lora_adapter(resume_dir)
+            except Exception as exc:
+                loaded = False
+                if self.is_main_process:
+                    logging.warning("Failed to load LoRA adapter: %s", exc)
+            if self.is_main_process and loaded:
+                logging.info("Loaded LoRA adapter from %s", resume_dir)
+        r3_path = os.path.join(resume_dir, "r3_state.pt")
+        if self.config.training.resume_r3 and os.path.exists(r3_path):
+            try:
+                state = torch.load(r3_path, map_location="cpu")
+                missing, unexpected = self.r3.load_state_dict(state, strict=False)
+                if self.is_main_process:
+                    logging.info("Loaded R3 state from %s", r3_path)
+                    if missing:
+                        logging.info("R3 missing keys: %s", missing)
+                    if unexpected:
+                        logging.info("R3 unexpected keys: %s", unexpected)
+            except Exception as exc:
+                if self.is_main_process:
+                    logging.warning("Failed to load R3 state: %s", exc)
+
     def _autocast(self):
         use_amp = self.config.training.fp16 or self.config.training.bf16
         if self.config.training.distributed_backend == "deepspeed" or not use_amp:
@@ -575,6 +626,7 @@ class Trainer:
     def _grad_finite_stats(self) -> Dict[str, float]:
         """Inspect gradients for non-finite values."""
         bad_params: list[str] = []
+        bad_params_full: list[str] = []
         params = itertools.chain(
             self.qwen.model.named_parameters(), self.r3.named_parameters()
         )
@@ -587,6 +639,7 @@ class Trainer:
             if not torch.isfinite(grad).all():
                 nonfinite += 1
                 grad.data = torch.nan_to_num(grad.data, nan=0.0, posinf=0.0, neginf=0.0)
+                bad_params_full.append(name)
                 if len(bad_params) < 3:
                     bad_params.append(name)
             max_abs = max(max_abs, float(grad.abs().max().item()))
@@ -594,6 +647,9 @@ class Trainer:
         self.last_grad_max_abs = float(max_abs)
         if bad_params:
             self.last_bad_params = bad_params
+        self.last_bad_in_memory_only = bool(bad_params_full) and all(
+            name.startswith("memory_aligner") for name in bad_params_full
+        )
         return {"grad_nonfinite": float(nonfinite), "grad_max_abs": float(max_abs)}
 
     @staticmethod
@@ -834,26 +890,39 @@ class Trainer:
                             dist.all_reduce(skip_tensor, op=dist.ReduceOp.MAX)
                             skip_step = bool(skip_tensor.item() > 0)
                         if skip_step and self.config.training.skip_nonfinite_grads:
-                            if self.is_main_process:
-                                logging.warning(
-                                    "Non-finite grads detected; skipping optimizer step."
-                                )
-                                if self.last_bad_params:
+                            if getattr(self, "last_bad_in_memory_only", False):
+                                if self.is_main_process:
                                     logging.warning(
-                                        "Non-finite grad params (sample): %s",
-                                        ", ".join(self.last_bad_params),
+                                        "Non-finite grads in memory_aligner; zeroing and continuing."
                                     )
-                            with torch.no_grad():
-                                self.r3.sanitize_parameters()
-                            if self.scaler:
-                                # Reset scaler state even when skipping the step to avoid double-unscale.
-                                self.scaler.update()
-                            if self.optimizer is not None:
-                                self.optimizer.zero_grad(set_to_none=True)
-                            global_step += 1
-                            if pbar is not None:
-                                pbar.update(1)
-                            continue
+                                if self.r3.memory_aligner is not None:
+                                    for param in self.r3.memory_aligner.parameters():
+                                        if param.grad is not None:
+                                            param.grad.data = torch.zeros_like(param.grad.data)
+                                with torch.no_grad():
+                                    self.r3.sanitize_parameters()
+                                skip_step = False
+                            else:
+                                if self.is_main_process:
+                                    logging.warning(
+                                        "Non-finite grads detected; skipping optimizer step."
+                                    )
+                                    if self.last_bad_params:
+                                        logging.warning(
+                                            "Non-finite grad params (sample): %s",
+                                            ", ".join(self.last_bad_params),
+                                        )
+                                with torch.no_grad():
+                                    self.r3.sanitize_parameters()
+                                if self.scaler:
+                                    # Reset scaler state even when skipping the step to avoid double-unscale.
+                                    self.scaler.update()
+                                if self.optimizer is not None:
+                                    self.optimizer.zero_grad(set_to_none=True)
+                                global_step += 1
+                                if pbar is not None:
+                                    pbar.update(1)
+                                continue
                         if skip_step and self.is_main_process:
                             logging.warning(
                                 "Non-finite grads detected; zeroed and continuing."
