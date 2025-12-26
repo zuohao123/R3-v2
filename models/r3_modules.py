@@ -178,6 +178,12 @@ class VisualMemoryTokens(nn.Module):
         self.memory_len = memory_len
         self.proj = nn.Linear(image_dim, hidden_dim)
         self.norm = nn.LayerNorm(hidden_dim)
+        # Small init to stabilize early training for visual memory.
+        nn.init.normal_(self.proj.weight, mean=0.0, std=0.02)
+        if self.proj.bias is not None:
+            nn.init.zeros_(self.proj.bias)
+        nn.init.ones_(self.norm.weight)
+        nn.init.zeros_(self.norm.bias)
 
     def forward(
         self, image_embeds: torch.Tensor, weights: Optional[torch.Tensor] = None

@@ -654,6 +654,7 @@ class Trainer:
                     "memory_aligner" in name
                     or "latent_tokens" in name
                     or "prefix_enhancer" in name
+                    or "visual_memory" in name
                 ):
                     continue
                 aux_only = False
@@ -916,6 +917,10 @@ class Trainer:
                                             param.grad.data = torch.zeros_like(param.grad.data)
                                 if self.r3.prefix_enhancer is not None:
                                     for param in self.r3.prefix_enhancer.parameters():
+                                        if param.grad is not None:
+                                            param.grad.data = torch.zeros_like(param.grad.data)
+                                if self.r3.visual_memory is not None:
+                                    for param in self.r3.visual_memory.parameters():
                                         if param.grad is not None:
                                             param.grad.data = torch.zeros_like(param.grad.data)
                                 with torch.no_grad():
