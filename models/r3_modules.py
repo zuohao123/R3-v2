@@ -290,6 +290,32 @@ class R3(nn.Module):
     def _sanitize(tensor: torch.Tensor, fill: float = 0.0) -> torch.Tensor:
         return torch.nan_to_num(tensor, nan=fill, posinf=fill, neginf=fill)
 
+    def sanitize_parameters(self, clamp: Optional[float] = 1.0) -> bool:
+        """Replace non-finite parameters in R3 modules to keep training stable."""
+        modules = [
+            self.memory_aligner,
+            self.prefix_enhancer,
+            self.visual_memory,
+            self.latent_tokens,
+            self.gate,
+            self.vis_proj,
+        ]
+        found = False
+        for module in modules:
+            if module is None:
+                continue
+            for param in module.parameters():
+                if param is None:
+                    continue
+                data = param.data
+                if not torch.isfinite(data).all():
+                    found = True
+                    data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+                if clamp is not None:
+                    data = data.clamp(-clamp, clamp)
+                param.data.copy_(data)
+        return found
+
     def _compose_context(
         self,
         retrieved_texts: List[List[str]],
@@ -484,10 +510,12 @@ class R3(nn.Module):
 
             mem_t = self._sanitize(mem_t)
             mem_i = self._sanitize(mem_i)
+            mem_t_gate = mem_t.detach()
+            mem_i_gate = mem_i.detach()
             vis_feat = self.vis_proj(image_embeds.mean(dim=1))
             vis_feat = self._sanitize(vis_feat)
             if self.gate is not None:
-                gates = self.gate(mem_t, mem_i, vis_feat)
+                gates = self.gate(mem_t_gate, mem_i_gate, vis_feat)
                 gates = self._sanitize(gates, fill=0.0)
                 gates = torch.softmax(gates, dim=-1)
                 gates = self._sanitize(gates, fill=1.0 / 3)
@@ -609,10 +637,12 @@ class R3(nn.Module):
                 device=self.qwen.device,
                 dtype=torch.float32,
             )
+        mem_t_gate = mem_t.detach()
+        mem_i_gate = mem_i.detach()
         vis_feat = self.vis_proj(image_embeds.mean(dim=1))
         vis_feat = self._sanitize(vis_feat)
         if self.gate is not None:
-            gates = self.gate(mem_t, mem_i, vis_feat)
+            gates = self.gate(mem_t_gate, mem_i_gate, vis_feat)
             gates = self._sanitize(gates, fill=0.0)
             gates = torch.softmax(gates, dim=-1)
             gates = self._sanitize(gates, fill=1.0 / 3)

@@ -184,6 +184,9 @@ class Trainer:
 
         self.r3 = R3(self.qwen, self.text_retriever, self.image_retriever, config.r3)
         self.r3.to(self.device)
+        # Clean any non-finite params (e.g., from resume or prior runs).
+        with torch.no_grad():
+            self.r3.sanitize_parameters()
 
         self.engine = None
         if self.config.training.distributed_backend == "fsdp":
@@ -840,6 +843,8 @@ class Trainer:
                                         "Non-finite grad params (sample): %s",
                                         ", ".join(self.last_bad_params),
                                     )
+                            with torch.no_grad():
+                                self.r3.sanitize_parameters()
                             if self.scaler:
                                 # Reset scaler state even when skipping the step to avoid double-unscale.
                                 self.scaler.update()
