@@ -650,7 +650,11 @@ class Trainer:
         if bad_params_full:
             aux_only = True
             for name in bad_params_full:
-                if "memory_aligner" in name or "latent_tokens" in name:
+                if (
+                    "memory_aligner" in name
+                    or "latent_tokens" in name
+                    or "prefix_enhancer" in name
+                ):
                     continue
                 aux_only = False
                 break
@@ -908,6 +912,10 @@ class Trainer:
                                             param.grad.data = torch.zeros_like(param.grad.data)
                                 if self.r3.latent_tokens is not None:
                                     for param in self.r3.latent_tokens.parameters():
+                                        if param.grad is not None:
+                                            param.grad.data = torch.zeros_like(param.grad.data)
+                                if self.r3.prefix_enhancer is not None:
+                                    for param in self.r3.prefix_enhancer.parameters():
                                         if param.grad is not None:
                                             param.grad.data = torch.zeros_like(param.grad.data)
                                 with torch.no_grad():
