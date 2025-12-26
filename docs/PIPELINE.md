@@ -297,7 +297,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_prefix --disable_memory --disable_visual_memory --disable_latent_tokens \
   --disable_gate --disable_context \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 0.0 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 1 (retrieval alignment warmup, text channel):
@@ -321,7 +322,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_prefix --disable_visual_memory --disable_latent_tokens --disable_gate --disable_context \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
   --r3_lr_mult 0.5 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 2 (text retrieval + prefix/memory, no image retrieval):
@@ -348,7 +350,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_memory --disable_gate --disable_context \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 3-A (image-only warmup, visual memory):
@@ -378,7 +381,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 0.8 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 3-B (image-only main, visual memory):
@@ -393,7 +397,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage3_image \
   --resume_from checkpoints/stage3_image/step_500 \
   --fp16 --use_lora --disable_teacher \
-  --batch_size 2 --grad_accum 4 \
+  --batch_size 4 --grad_accum 4 \
   --learning_rate 1e-6 \
   --loss_scale 64 \
   --r3_lr_mult 0.3 \
@@ -408,7 +412,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 4 (joint, clean):
@@ -423,7 +428,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage4_joint \
   --resume_from checkpoints/stage3_image/step_1500 \
   --fp16 --use_lora --disable_teacher \
-  --batch_size 2 --grad_accum 4 \
+  --batch_size 4 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 2000 --save_every 2000 --eval_every 1000000 \
@@ -432,7 +437,8 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
-  --r3_fp32
+  --r3_fp32 \
+  --max_corruption 0.8 --corruption_warmup_steps 1 --corruption_total_steps 1
 ```
 
 Stage 5 (full training with strong corruption curriculum):
@@ -454,7 +460,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
-  --max_corruption 0.9 \
+  --max_corruption 1 \
   --corruption_warmup_steps 2000 \
   --corruption_total_steps 10000 \
   --r3_fp32
@@ -509,7 +515,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_prefix --disable_memory --disable_visual_memory --disable_latent_tokens \
   --disable_gate --disable_context \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32 > logs/stage0.log 2>&1 &
+  --r3_fp32 \
+  --max_corruption 0.0 --corruption_warmup_steps 1 --corruption_total_steps 1 \
+  > logs/stage0.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -530,7 +538,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_prefix --disable_visual_memory --disable_latent_tokens --disable_gate --disable_context \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
   --r3_lr_mult 0.5 \
-  --r3_fp32 > logs/stage1.log 2>&1 &
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
+  > logs/stage1.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -554,7 +564,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_memory --disable_gate --disable_context \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32 > logs/stage2_text.log 2>&1 &
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
+  > logs/stage2_text.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -581,7 +593,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
-  --r3_fp32 > logs/stage3a_image.log 2>&1 &
+  --r3_fp32 \
+  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
+  > logs/stage3a_image.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -608,7 +622,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
-  --r3_fp32 > logs/stage3b_image.log 2>&1 &
+  --r3_fp32 \
+  -max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
+  > logs/stage3b_image.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -629,7 +645,9 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
-  --r3_fp32 > logs/stage4_joint.log 2>&1 &
+  --r3_fp32 \
+  -max_corruption 1 --corruption_warmup_steps 1500 --corruption_total_steps 1500 \
+  > logs/stage4_joint.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -649,7 +667,7 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --max_corruption 1 \
-  --corruption_warmup_steps 2000 \
+  --corruption_warmup_steps 4000 \
   --corruption_total_steps 10000 \
   --r3_fp32 > logs/stage5_full.log 2>&1 &
 ```

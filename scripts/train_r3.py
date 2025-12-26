@@ -110,6 +110,25 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    if args.resume_from:
+        if not os.path.isdir(args.resume_from):
+            raise FileNotFoundError(f"resume_from path not found: {args.resume_from}")
+        r3_state = os.path.join(args.resume_from, "r3_state.pt")
+        if not os.path.exists(r3_state):
+            raise FileNotFoundError(
+                f"resume_from missing r3_state.pt: {args.resume_from}"
+            )
+        if args.use_lora:
+            adapter_safetensors = os.path.join(
+                args.resume_from, "adapter_model.safetensors"
+            )
+            adapter_bin = os.path.join(args.resume_from, "adapter_model.bin")
+            if not (os.path.exists(adapter_safetensors) or os.path.exists(adapter_bin)):
+                raise FileNotFoundError(
+                    "resume_from missing LoRA adapter weights (adapter_model.safetensors|bin): "
+                    f"{args.resume_from}"
+                )
+
     cfg = TrainConfig()
     cfg.data.train_jsonl = args.train_jsonl
     cfg.data.val_jsonl = args.val_jsonl
