@@ -559,6 +559,8 @@ class Trainer:
     def _save_checkpoint(self, step: int) -> None:
         out_dir = os.path.join(self.config.training.output_dir, f"step_{step}")
         os.makedirs(out_dir, exist_ok=True)
+        if self.is_main_process:
+            logging.info("Saving checkpoint to %s", out_dir)
         if self.config.training.distributed_backend == "fsdp":
             state_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(
@@ -583,6 +585,7 @@ class Trainer:
                 torch.save(self.optimizer.state_dict(), os.path.join(out_dir, "optimizer.pt"))
             with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
                 json.dump(self.config.to_dict(), f, indent=2)
+            logging.info("Saved checkpoint to %s", out_dir)
         if self.distributed:
             dist.barrier()
 
@@ -1080,27 +1083,20 @@ class Trainer:
 
                 self._log_samples(batch, corruption_level, global_step)
 
-                if (
-                    global_step > 0
-                    and global_step % self.config.training.eval_every == 0
-                ):
+                step_id = global_step + 1
+                if step_id > 0 and step_id % self.config.training.eval_every == 0:
                     self.evaluate()
 
-                if (
-                    global_step > 0
-                    and global_step % self.config.training.save_every == 0
-                ):
-                    self._save_checkpoint(global_step)
-
-                if (
-                    total_steps is not None
-                    and self.config.training.save_every
-                    and global_step + 1 >= total_steps
-                    and (global_step + 1) % self.config.training.save_every != 0
-                ):
-                    # Ensure a final checkpoint is written when the last step
-                    # does not coincide with save_every.
-                    self._save_checkpoint(global_step + 1)
+                if step_id > 0 and self.config.training.save_every:
+                    if step_id % self.config.training.save_every == 0:
+                        self._save_checkpoint(step_id)
+                if total_steps is not None and step_id >= total_steps:
+                    # Ensure a final checkpoint is written even if save_every
+                    # is larger than max_steps or not aligned.
+                    if not self.config.training.save_every or (
+                        step_id % self.config.training.save_every != 0
+                    ):
+                        self._save_checkpoint(step_id)
 
                 global_step += 1
 
