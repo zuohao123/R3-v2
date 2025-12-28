@@ -61,7 +61,9 @@ def consistency_loss(
     min_len = min(student.size(1), teacher.size(1))
     student = student[:, :min_len, :]
     teacher = teacher[:, :min_len, :]
-    return F.kl_div(student, teacher, reduction="batchmean") * (temperature**2)
+    loss = F.kl_div(student, teacher, reduction="batchmean") * (temperature**2)
+    denom = max(min_len, 1)
+    return loss / float(denom)
 
 
 def gate_confidence_loss(
