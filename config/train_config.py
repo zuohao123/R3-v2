@@ -149,6 +149,10 @@ class TrainingConfig:
     fsdp_use_orig_params: bool = True
     fsdp_sharding: str = "full"  # "full", "grad", "no_shard"
     use_teacher: bool = True
+    teacher_mode: str = "ema"  # "copy", "ema", "shared"
+    teacher_ema_decay: float = 0.999
+    teacher_ema_update_steps: int = 1
+    teacher_ema_start_step: int = 0
     resume_from: Optional[str] = None
     resume_optimizer: bool = False
     resume_r3: bool = True

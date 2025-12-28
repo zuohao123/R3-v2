@@ -1,6 +1,7 @@
 """Trainer for R3++ multimodal QA."""
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
 import logging
@@ -73,6 +74,54 @@ class R3TrainModule(torch.nn.Module):
         return bundle
 
 
+class EmaTeacher:
+    """EMA helper for trainable parameters."""
+
+    def __init__(
+        self, model: torch.nn.Module, decay: float = 0.999, use_fp32: bool = True
+    ) -> None:
+        self.decay = decay
+        self.use_fp32 = use_fp32
+        self.params: list[tuple[str, torch.nn.Parameter]] = []
+        self.shadow: dict[str, torch.Tensor] = {}
+        for name, param in model.named_parameters():
+            if not param.requires_grad or not torch.is_floating_point(param):
+                continue
+            self.params.append((name, param))
+            dtype = torch.float32 if use_fp32 else param.dtype
+            self.shadow[name] = param.detach().to(dtype=dtype).clone()
+
+    def update(self) -> None:
+        if not self.params:
+            return
+        decay = self.decay
+        for name, param in self.params:
+            data = param.detach()
+            if self.use_fp32:
+                data = data.float()
+            self.shadow[name].mul_(decay).add_(data, alpha=1.0 - decay)
+
+    @contextlib.contextmanager
+    def swap_to_ema(self):
+        if not self.params:
+            yield
+            return
+        backups: dict[str, torch.Tensor] = {}
+        for name, param in self.params:
+            backups[name] = param.data.clone()
+            ema = self.shadow[name]
+            if ema.device != param.device:
+                ema = ema.to(param.device)
+            if ema.dtype != param.dtype:
+                ema = ema.to(param.dtype)
+            param.data.copy_(ema)
+        try:
+            yield
+        finally:
+            for name, param in self.params:
+                param.data.copy_(backups[name])
+
+
 class DistributedTemperatureSampler(Sampler[int]):
     """Distributed weighted sampler with temperature smoothing."""
 
@@ -143,6 +192,7 @@ class Trainer:
             torch_dtype=config.model.torch_dtype,
             device=config.model.device,
             use_teacher=config.training.use_teacher,
+            teacher_mode=config.training.teacher_mode,
             use_lora=config.model.use_lora,
             lora_r=config.model.lora_r,
             lora_alpha=config.model.lora_alpha,
@@ -194,6 +244,19 @@ class Trainer:
             self._wrap_fsdp()
         elif self.config.training.distributed_backend == "deepspeed":
             self._init_deepspeed()
+
+        self.teacher_mode = self.config.training.teacher_mode
+        self.teacher_ema: Optional[EmaTeacher] = None
+        self.optim_step = 0
+        if self.config.training.use_teacher and self.teacher_mode == "ema":
+            self.teacher_ema = EmaTeacher(
+                self.qwen.model, decay=self.config.training.teacher_ema_decay, use_fp32=True
+            )
+            if self.is_main_process:
+                logging.info(
+                    "Initialized EMA teacher with %d trainable params.",
+                    len(self.teacher_ema.params),
+                )
 
         self.curriculum = CurriculumScheduler(
             max_corruption=config.curriculum.max_corruption,
@@ -517,6 +580,65 @@ class Trainer:
         self.engine = engine
         self.optimizer = optimizer
 
+    def _maybe_update_ema(self) -> None:
+        if self.teacher_ema is None:
+            return
+        if self.optim_step < self.config.training.teacher_ema_start_step:
+            return
+        if self.config.training.teacher_ema_update_steps <= 0:
+            return
+        if self.optim_step % self.config.training.teacher_ema_update_steps != 0:
+            return
+        with torch.no_grad():
+            self.teacher_ema.update()
+
+    def _forward_teacher_shared(
+        self,
+        images,
+        questions,
+        pseudo_texts,
+        answers,
+    ) -> Any:
+        was_training = self.qwen.model.training
+        self.qwen.model.eval()
+        with torch.no_grad():
+            with self._autocast():
+                outputs = self.qwen.forward_student(
+                    images,
+                    questions,
+                    pseudo_texts,
+                    answers,
+                    max_length=self.config.data.max_length,
+                )
+        if was_training:
+            self.qwen.model.train()
+        return outputs
+
+    def _forward_teacher_ema(
+        self,
+        images,
+        questions,
+        pseudo_texts,
+        answers,
+    ) -> Any:
+        if self.teacher_ema is None:
+            return None
+        was_training = self.qwen.model.training
+        self.qwen.model.eval()
+        with torch.no_grad():
+            with self.teacher_ema.swap_to_ema():
+                with self._autocast():
+                    outputs = self.qwen.forward_student(
+                        images,
+                        questions,
+                        pseudo_texts,
+                        answers,
+                        max_length=self.config.data.max_length,
+                    )
+        if was_training:
+            self.qwen.model.train()
+        return outputs
+
     def _resume_from_checkpoint(self) -> None:
         resume_dir = self.config.training.resume_from
         if not resume_dir:
@@ -804,14 +926,29 @@ class Trainer:
 
                 teacher_outputs = None
                 if self.config.training.use_teacher:
-                    with self._autocast():
-                        teacher_outputs = self.qwen.forward_teacher(
+                    if self.teacher_mode == "ema":
+                        teacher_outputs = self._forward_teacher_ema(
                             clean["images"],
                             clean["questions"],
                             corrupted["pseudo_texts"],
                             clean["answers"],
-                            max_length=self.config.data.max_length,
                         )
+                    elif self.teacher_mode == "shared":
+                        teacher_outputs = self._forward_teacher_shared(
+                            clean["images"],
+                            clean["questions"],
+                            corrupted["pseudo_texts"],
+                            clean["answers"],
+                        )
+                    else:
+                        with self._autocast():
+                            teacher_outputs = self.qwen.forward_teacher(
+                                clean["images"],
+                                clean["questions"],
+                                corrupted["pseudo_texts"],
+                                clean["answers"],
+                                max_length=self.config.data.max_length,
+                            )
 
                 if self.config.training.distributed_backend == "deepspeed":
                     with self._autocast():
@@ -835,6 +972,8 @@ class Trainer:
                         loss = losses["total"]
                     self.engine.backward(loss)
                     self.engine.step()
+                    self.optim_step += 1
+                    self._maybe_update_ema()
                 else:
                     with self._autocast():
                         student_bundle = self.r3.forward_student(
@@ -899,6 +1038,7 @@ class Trainer:
                         loss.backward()
 
                     if (global_step + 1) % self.config.training.gradient_accumulation == 0:
+                        did_step = False
                         if self.scaler:
                             self.scaler.unscale_(self.optimizer)
                         grad_stats = self._grad_finite_stats()
@@ -983,6 +1123,7 @@ class Trainer:
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
                             scale = self.scaler.get_scale()
+                            did_step = True
                             if self.distributed:
                                 scale_flag = torch.tensor(
                                     1 if scale < 1 else 0,
@@ -1010,8 +1151,12 @@ class Trainer:
                             assert self.optimizer is not None
                             self._clip_gradients()
                             self.optimizer.step()
+                            did_step = True
                         assert self.optimizer is not None
                         self.optimizer.zero_grad(set_to_none=True)
+                        if did_step:
+                            self.optim_step += 1
+                            self._maybe_update_ema()
 
                 if global_step % self.config.training.log_every == 0 and self.is_main_process:
                     lr = None

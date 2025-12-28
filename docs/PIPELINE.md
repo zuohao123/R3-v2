@@ -623,7 +623,7 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
   --r3_fp32 \
-  -max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
+  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
   > logs/stage3b_image.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
@@ -636,17 +636,17 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage4_joint \
   --resume_from checkpoints/stage3_image/step_1500 \
   --fp16 --use_lora --disable_teacher \
-  --batch_size 4 --grad_accum 4 \
+  --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 2000 --save_every 2000 --eval_every 1000000 \
+  --max_steps 2001 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
   --disable_latent_tokens \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --r3_fp32 \
-  -max_corruption 1 --corruption_warmup_steps 1500 --corruption_total_steps 1500 \
+  --max_corruption 1 --corruption_warmup_steps 1500 --corruption_total_steps 1500 \
   > logs/stage4_joint.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
@@ -659,10 +659,10 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage5_full \
   --resume_from checkpoints/stage4_joint/step_2000 \
   --fp16 --use_lora \
-  --batch_size 4 --grad_accum 4 \
+  --batch_size 1 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 10000 --save_every 10000 --eval_every 1000 \
+  --max_steps 10001 --save_every 2000 --eval_every 1000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \

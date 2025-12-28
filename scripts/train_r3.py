@@ -82,6 +82,15 @@ def main() -> None:
         default="full",
     )
     parser.add_argument("--disable_teacher", action="store_true")
+    parser.add_argument(
+        "--teacher_mode",
+        choices=["copy", "ema", "shared"],
+        default=None,
+        help="Teacher mode: copy (full teacher), ema (EMA over trainable params), shared (no EMA).",
+    )
+    parser.add_argument("--teacher_ema_decay", type=float, default=None)
+    parser.add_argument("--teacher_ema_update_steps", type=int, default=None)
+    parser.add_argument("--teacher_ema_start_step", type=int, default=None)
     parser.add_argument("--disable_corruption", action="store_true")
     parser.add_argument("--max_corruption", type=float, default=None)
     parser.add_argument("--corruption_warmup_steps", type=int, default=None)
@@ -205,6 +214,14 @@ def main() -> None:
     cfg.training.fsdp_cpu_offload = args.fsdp_cpu_offload
     cfg.training.fsdp_sharding = args.fsdp_sharding
     cfg.training.use_teacher = not args.disable_teacher
+    if args.teacher_mode is not None:
+        cfg.training.teacher_mode = args.teacher_mode
+    if args.teacher_ema_decay is not None:
+        cfg.training.teacher_ema_decay = args.teacher_ema_decay
+    if args.teacher_ema_update_steps is not None:
+        cfg.training.teacher_ema_update_steps = args.teacher_ema_update_steps
+    if args.teacher_ema_start_step is not None:
+        cfg.training.teacher_ema_start_step = args.teacher_ema_start_step
     cfg.r3.enable_corruption = not args.disable_corruption
     if args.max_corruption is not None:
         cfg.curriculum.max_corruption = args.max_corruption

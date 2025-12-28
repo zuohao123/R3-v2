@@ -41,6 +41,7 @@ class QwenVLConfig:
     torch_dtype: str = "bf16"
     device: str = "cuda"
     use_teacher: bool = True
+    teacher_mode: str = "ema"  # "copy", "ema", "shared"
     use_lora: bool = False
     lora_r: int = 16
     lora_alpha: int = 32
@@ -67,7 +68,8 @@ class QwenVLWrapper:
             self.model.to(self.device, dtype=dtype)
 
         self.teacher = None
-        if config.use_teacher:
+        self.teacher_mode = config.teacher_mode
+        if config.use_teacher and config.teacher_mode == "copy":
             self.teacher = copy.deepcopy(self.model)
             self.teacher.requires_grad_(False)
             self.teacher.eval()
@@ -428,6 +430,16 @@ class QwenVLWrapper:
         max_length: Optional[int] = None,
     ) -> Any:
         if self.teacher is None:
+            if self.teacher_mode == "shared":
+                inputs = self.encode_inputs(
+                    images,
+                    questions,
+                    pseudo_texts=pseudo_texts,
+                    answers=answers,
+                    max_length=max_length,
+                )
+                with torch.no_grad():
+                    return self.model(**inputs)
             raise RuntimeError("Teacher model is disabled. Set use_teacher=True to enable it.")
         inputs = self.encode_inputs(images, questions, pseudo_texts, answers, max_length)
         with torch.no_grad():
