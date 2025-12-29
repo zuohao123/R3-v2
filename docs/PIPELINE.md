@@ -277,7 +277,7 @@ python -m deepspeed.utils.zero_to_fp32 \
 
 ## 5d) Staged Training (recommended, 8x V100)
 
-Stage 0 (LoRA-only adaptation, clean):
+Stage 1 (clean LoRA adaptation, no retrieval/corruption):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -286,7 +286,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --output_dir checkpoints/stage0 \
+  --output_dir checkpoints/stage1 \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
@@ -297,36 +297,10 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_prefix --disable_memory --disable_visual_memory --disable_latent_tokens \
   --disable_gate --disable_context \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32 \
-  --max_corruption 0.0 --corruption_warmup_steps 1 --corruption_total_steps 1
+  --r3_fp32
 ```
 
-Stage 1 (retrieval alignment warmup, text channel):
-```bash
-torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --output_dir checkpoints/stage1 \
-  --resume_from checkpoints/stage0/step_1000 \
-  --fp16 --use_lora --disable_teacher \
-  --batch_size 2 --grad_accum 4 \
-  --learning_rate 1e-6 \
-  --max_length 2048 --max_context_chars 128 \
-  --max_steps 1000 --save_every 1000 --eval_every 1000000 \
-  --sample_every 0 --num_workers 0 \
-  --disable_corruption \
-  --disable_prefix --disable_visual_memory --disable_latent_tokens --disable_gate --disable_context \
-  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
-  --r3_lr_mult 0.5 \
-  --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
-```
-
-Stage 2 (text retrieval + prefix/memory, no image retrieval):
+Stage 2 (text retrieval warm-up, text-only path):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -340,21 +314,18 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --loss_scale 64 \
-  --r3_lr_mult 0.5 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 1000 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
   --disable_image_retrieval --disable_visual_memory \
-  --disable_memory --disable_gate --disable_context \
-  --disable_latent_tokens \
-  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
+  --disable_gate --disable_context --disable_latent_tokens \
+  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
+  --r3_lr_mult 0.5 \
+  --r3_fp32
 ```
 
-Stage 3-A (image-only warmup, visual memory):
+Stage 3 (image retrieval warm-up, visual memory):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -369,51 +340,18 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --loss_scale 32 \
-  --r3_lr_mult 0.1 \
-  --max_grad_norm 0.5 \
-  --max_length 2048 --max_context_chars 128 \
-  --max_steps 500 --save_every 500 --eval_every 1000000 \
-  --sample_every 0 --num_workers 0 \
-  --sampling_alpha 0.5 \
-  --disable_corruption \
-  --disable_text_retrieval --disable_prefix \
-  --disable_memory --disable_gate --disable_context \
-  --disable_latent_tokens \
-  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --visual_memory_len 1 \
-  --r3_fp32 \
-  --max_corruption 0.8 --corruption_warmup_steps 1 --corruption_total_steps 1
-```
-
-Stage 3-B (image-only main, visual memory):
-```bash
-torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --output_dir checkpoints/stage3_image \
-  --resume_from checkpoints/stage3_image/step_500 \
-  --fp16 --use_lora --disable_teacher \
-  --batch_size 4 --grad_accum 4 \
-  --learning_rate 1e-6 \
-  --loss_scale 64 \
-  --r3_lr_mult 0.3 \
+  --r3_lr_mult 0.2 \
   --max_grad_norm 0.5 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 1500 --save_every 1500 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
-  --sampling_alpha 0.5 \
   --disable_corruption \
   --disable_text_retrieval --disable_prefix \
   --disable_memory --disable_gate --disable_context \
   --disable_latent_tokens \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
-  --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1 --corruption_total_steps 1
+  --r3_fp32
 ```
 
 Stage 4 (joint, clean):
@@ -428,7 +366,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage4_joint \
   --resume_from checkpoints/stage3_image/step_1500 \
   --fp16 --use_lora --disable_teacher \
-  --batch_size 4 --grad_accum 4 \
+  --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 2000 --save_every 2000 --eval_every 1000000 \
@@ -437,11 +375,10 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_latent_tokens \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
-  --r3_fp32 \
-  --max_corruption 0.8 --corruption_warmup_steps 1 --corruption_total_steps 1
+  --r3_fp32
 ```
 
-Stage 5 (full training with strong corruption curriculum):
+Stage 5 (full training with strong corruption + EMA teacher):
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -453,16 +390,20 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage5_full \
   --resume_from checkpoints/stage4_joint/step_2000 \
   --fp16 --use_lora \
-  --batch_size 2 --grad_accum 4 \
+  --batch_size 1 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 10000 --save_every 10000 --eval_every 1000 \
+  --max_steps 10000 --save_every 2000 --eval_every 1000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --max_corruption 1 \
-  --corruption_warmup_steps 2000 \
+  --corruption_warmup_steps 4000 \
   --corruption_total_steps 10000 \
+  --teacher_mode ema \
+  --teacher_ema_decay 0.999 \
+  --teacher_ema_update_steps 1 \
+  --teacher_ema_start_step 0 \
   --r3_fp32
 ```
 
@@ -504,7 +445,7 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --output_dir checkpoints/stage0 \
+  --output_dir checkpoints/stage1 \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
@@ -516,30 +457,6 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --disable_gate --disable_context \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --r3_fp32 \
-  --max_corruption 0.0 --corruption_warmup_steps 1 --corruption_total_steps 1 \
-  > logs/stage0.log 2>&1 &
-
-nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --output_dir checkpoints/stage1 \
-  --resume_from checkpoints/stage0/step_1000 \
-  --fp16 --use_lora --disable_teacher \
-  --batch_size 2 --grad_accum 4 \
-  --learning_rate 1e-6 \
-  --max_length 2048 --max_context_chars 128 \
-  --max_steps 1000 --save_every 1000 --eval_every 1000000 \
-  --sample_every 0 --num_workers 0 \
-  --disable_corruption \
-  --disable_prefix --disable_visual_memory --disable_latent_tokens --disable_gate --disable_context \
-  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
-  --r3_lr_mult 0.5 \
-  --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
   > logs/stage1.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
@@ -554,18 +471,15 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --fp16 --use_lora --disable_teacher \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
-  --loss_scale 64 \
-  --r3_lr_mult 0.5 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 1000 --save_every 1000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
   --disable_image_retrieval --disable_visual_memory \
-  --disable_memory --disable_gate --disable_context \
-  --disable_latent_tokens \
-  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
+  --disable_gate --disable_context --disable_latent_tokens \
+  --retrieval_align_weight 0.05 --retrieval_align_temperature 0.1 \
+  --r3_lr_mult 0.5 \
   --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
   > logs/stage2_text.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
@@ -581,41 +495,11 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --loss_scale 32 \
-  --r3_lr_mult 0.1 \
-  --max_grad_norm 0.5 \
-  --max_length 2048 --max_context_chars 128 \
-  --max_steps 500 --save_every 500 --eval_every 1000000 \
-  --sample_every 0 --num_workers 0 \
-  --sampling_alpha 0.5 \
-  --disable_corruption \
-  --disable_text_retrieval --disable_prefix \
-  --disable_memory --disable_gate --disable_context \
-  --disable_latent_tokens \
-  --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
-  --visual_memory_len 1 \
-  --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
-  > logs/stage3a_image.log 2>&1 &
-
-nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --output_dir checkpoints/stage3_image \
-  --resume_from checkpoints/stage3_image/step_500 \
-  --fp16 --use_lora --disable_teacher \
-  --batch_size 4 --grad_accum 4 \
-  --learning_rate 1e-6 \
-  --loss_scale 64 \
-  --r3_lr_mult 0.3 \
+  --r3_lr_mult 0.2 \
   --max_grad_norm 0.5 \
   --max_length 2048 --max_context_chars 128 \
   --max_steps 1500 --save_every 1500 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
-  --sampling_alpha 0.5 \
   --disable_corruption \
   --disable_text_retrieval --disable_prefix \
   --disable_memory --disable_gate --disable_context \
@@ -623,8 +507,7 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --retrieval_align_weight 0 --gate_conf_weight 0 --gate_entropy_weight 0 \
   --visual_memory_len 1 \
   --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1000 --corruption_total_steps 1000 \
-  > logs/stage3b_image.log 2>&1 &
+  > logs/stage3_image.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -639,14 +522,13 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 2001 --save_every 1000 --eval_every 1000000 \
+  --max_steps 2000 --save_every 2000 --eval_every 1000000 \
   --sample_every 0 --num_workers 0 \
   --disable_corruption \
   --disable_latent_tokens \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --r3_fp32 \
-  --max_corruption 1 --corruption_warmup_steps 1500 --corruption_total_steps 1500 \
   > logs/stage4_joint.log 2>&1 &
 
 nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
@@ -662,14 +544,19 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --batch_size 1 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 10001 --save_every 2000 --eval_every 1000 \
+  --max_steps 10000 --save_every 2000 --eval_every 1000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --max_corruption 1 \
   --corruption_warmup_steps 4000 \
   --corruption_total_steps 10000 \
-  --r3_fp32 > logs/stage5_full.log 2>&1 &
+  --teacher_mode ema \
+  --teacher_ema_decay 0.999 \
+  --teacher_ema_update_steps 1 \
+  --teacher_ema_start_step 0 \
+  --r3_fp32 \
+  > logs/stage5_full.log 2>&1 &
 ```
 
 To monitor a stage:
