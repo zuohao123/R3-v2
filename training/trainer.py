@@ -1255,6 +1255,36 @@ class Trainer:
             logging.warning("Skipping evaluation during DeepSpeed training.")
             return
 
+        if self.config.training.distributed_backend == "fsdp" and self.distributed:
+            # Summon full params on rank0 for generation to avoid sharded weight shape issues.
+            with FSDP.summon_full_params(
+                self.qwen.model, rank0_only=True, writeback=False
+            ):
+                if self.is_main_process:
+                    results = evaluate_model(
+                        self.r3,
+                        self.val_loader,
+                        corruption_levels=[0.0, 0.4, 0.8],
+                        max_new_tokens=self.config.evaluation.max_new_tokens,
+                        top_k=self.config.retrieval.top_k,
+                        return_sums=False,
+                    )
+                else:
+                    results = {}
+            dist.barrier()
+            if self.is_main_process:
+                logging.info("Evaluation:")
+                for level, metrics in results.items():
+                    logging.info(
+                        "  corruption=%.2f | EM %.3f F1 %.3f BLEU %.3f ROUGE-L %.3f",
+                        level,
+                        metrics["exact_match"],
+                        metrics["f1"],
+                        metrics["bleu"],
+                        metrics["rouge_l"],
+                    )
+            return
+
         results = evaluate_model(
             self.r3,
             self.val_loader,
