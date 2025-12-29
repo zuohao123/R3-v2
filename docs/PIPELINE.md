@@ -541,15 +541,15 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage5_full \
   --resume_from checkpoints/stage4_joint/step_2000 \
   --fp16 --use_lora \
-  --batch_size 1 --grad_accum 4 \
+  --batch_size 2 --grad_accum 4 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 10000 --save_every 2000 --eval_every 1000 \
+  --max_steps 10001 --save_every 2000 --eval_every 100000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --max_corruption 1 \
-  --corruption_warmup_steps 4000 \
+  --corruption_warmup_steps 5000 \
   --corruption_total_steps 10000 \
   --teacher_mode ema \
   --teacher_ema_decay 0.999 \
@@ -565,6 +565,9 @@ tail -f logs/stage5_full.log
 ```
 
 ## 6) Evaluate
+
+Evaluation already logs progress per corruption level (done/total batches and ETA).
+If you want more frequent progress updates, pass `--eval_log_every` (or reduce `--max_eval_samples`).
 
 ```bash
 python scripts/eval_r3.py \
@@ -591,6 +594,34 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
+### Base model (per-dataset, clean)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/base_clean_by_dataset.json
+```
+
+### Base model (clean, use pseudo-text)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --use_pseudo_text \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3
+```
+
 ### Base model only (corruption sweep, no R3 / no retrieval)
 ```bash
 python scripts/eval_r3.py \
@@ -604,6 +635,21 @@ python scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --out_json results/base_corrupt.json
+```
+
+### Base model (per-dataset, corruption sweep)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/base_corrupt_by_dataset.json
 ```
 
 ### Base model only (image-only corruption)
@@ -621,11 +667,56 @@ python scripts/eval_r3.py \
   --out_json results/base_corrupt_image_only.json
 ```
 
+### Base model (text-only corruption)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --corrupt_text_target question \
+  --disable_corruption \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/base_corrupt_text_only.json
+```
+
 ### R3 model (clean)
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
   --clean_only \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3
+```
+
+### R3 model (per-dataset, clean)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/r3_clean_by_dataset.json
+```
+
+### R3 model (clean, no pseudo-text)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --no_pseudo_text \
   --checkpoint_dir checkpoints/step_1000 \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
@@ -647,7 +738,21 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
-### R3 ablation example (disable retrieval + prefix + gate)
+### R3 model (per-dataset, corruption sweep)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/r3_corrupt_by_dataset.json
+```
+### R3 ablation: no retrieval + no prefix + no gate
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -656,6 +761,35 @@ python scripts/eval_r3.py \
   --disable_image_retrieval \
   --disable_prefix \
   --disable_gate \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3
+```
+
+### R3 ablation: no visual memory + no latent tokens
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_visual_memory \
+  --disable_latent_tokens \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3
+```
+
+### R3 ablation: disable soft prefix
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_soft_prefix \
   --checkpoint_dir checkpoints/step_1000 \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
