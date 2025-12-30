@@ -1,4 +1,4 @@
-# R3++ End-to-End Pipeline (Download → Build → Train → Eval)
+# R3 End-to-End Pipeline (Download → Build → Train → Eval)
 
 This runbook assumes you want to train a **single unified model** across ScreenQA + ChartQA + InfoVQA.
 It also flags current limitations around full fine-tuning on 8x V100.
@@ -815,6 +815,97 @@ python scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noretr_by_dataset.json
+```
+
+### Multi-GPU per-dataset evaluation (explicit torchrun)
+```bash
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_clean_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_corrupt_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_clean_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_corrupt_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_gate \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5 \

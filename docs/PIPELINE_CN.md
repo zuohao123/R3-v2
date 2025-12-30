@@ -1,4 +1,4 @@
-# R3++ 全流程实验管线（下载 → 预处理 → 索引 → 训练 → 评测）
+# R3 全流程实验管线（下载 → 预处理 → 索引 → 训练 → 评测）
 
 本文档为中文版实验操作手册，覆盖数据下载、OCR、统一数据格式、索引构建、分阶段训练和评测（含消融与不同腐蚀强度）。
 默认基座模型与检索模型已在 `models/` 下。
@@ -182,7 +182,7 @@ python scripts/build_indices.py --out_dir indices --merge_shards 8
 ## 6) 训练（推荐分阶段）
 
 ### 训练说明（方法设计）
-- R3++ 采用 **腐蚀模拟 + 双通道检索 + 三路径重建**。
+- R3 采用 **腐蚀模拟 + 双通道检索 + 三路径重建**。
 - 训练采用 **clean → warm-up → joint → 强腐蚀** 的课程学习。
 - Stage5 使用 **EMA Teacher**，避免复制完整教师导致 OOM。
 - 建议 `max_length=2048`；`4096` 在多卡下可能引发 NCCL 超时或卡住。
@@ -595,6 +595,97 @@ python scripts/eval_r3.py \
   --out_json results/r3_corrupt_by_dataset.json
 ```
 
+### 7.4.1 多卡按数据集评测（torchrun）
+```bash
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_clean_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_corrupt_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_clean_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_corrupt_by_dataset.json
+
+torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_gate \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noretr_by_dataset.json
+```
+
 ### 7.5 R3 消融评测
 ```bash
 python scripts/eval_r3.py \
@@ -632,6 +723,6 @@ python scripts/eval_r3.py \
 
 - 数据集：ScreenQA、ChartQA、InfographicVQA。
 - 目标：在 **部分模态缺失/腐蚀** 条件下做生成式多模态 QA。
-- 方法：R3++ = 腐蚀模拟 + 文本/图像双通道检索 + 三路径重建 + 自适应门控 + clean/corrupt 一致性。
+- 方法：R3 = 腐蚀模拟 + 文本/图像双通道检索 + 三路径重建 + 自适应门控 + clean/corrupt 一致性。
 - 训练策略：clean → 单通道 warm-up → clean joint → 强腐蚀 + EMA teacher。
 - 评测：在 `corruption_levels` 的不同强度下评测，报告 EM/F1/BLEU/ROUGE（代码内已实现）。如需 ANLS 等指标可后续扩展。
