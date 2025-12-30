@@ -57,9 +57,18 @@ class QwenVLWrapper:
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
         self._require_grads_hook = None
         self.processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
+        if hasattr(self.processor, "tokenizer") and self.processor.tokenizer is not None:
+            tokenizer = self.processor.tokenizer
+            tokenizer.padding_side = "left"
+            if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+                tokenizer.pad_token = tokenizer.eos_token
         dtype = self._resolve_dtype(config.torch_dtype)
         self.model_dtype = dtype
         self.model = self._load_model(config.model_name, dtype)
+        if hasattr(self.model.config, "pad_token_id") and hasattr(self.processor, "tokenizer"):
+            pad_id = self.processor.tokenizer.pad_token_id
+            if pad_id is not None and self.model.config.pad_token_id is None:
+                self.model.config.pad_token_id = pad_id
         self.model.to(self.device, dtype=dtype)
         self.model.train()
 
