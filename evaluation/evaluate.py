@@ -351,7 +351,9 @@ def evaluate_model(
 
 
 def save_results(results: Dict[float, Dict[str, float]], out_path: str) -> None:
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
