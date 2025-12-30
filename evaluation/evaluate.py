@@ -47,6 +47,31 @@ def _canonical_text(text: str) -> str:
     return " ".join(_canonical_tokens(text))
 
 
+def _numeric_match(pred: str, ref: str, tol: float = 0.0) -> bool:
+    pred_num = _try_parse_float(pred)
+    ref_num = _try_parse_float(ref)
+    if pred_num is None or ref_num is None:
+        return False
+    if tol > 0:
+        denom = max(abs(ref_num), 1e-6)
+        return abs(pred_num - ref_num) / denom <= tol
+    return abs(pred_num - ref_num) < 1e-6
+
+
+def _subset_match(pred: str, ref: str, max_ref_tokens: int = 6) -> bool:
+    ref_tokens = _canonical_tokens(ref)
+    pred_tokens = _canonical_tokens(pred)
+    if not ref_tokens or not pred_tokens:
+        return bool(ref_tokens == pred_tokens)
+    if _numeric_match(pred, ref):
+        return True
+    if len(ref_tokens) > max_ref_tokens:
+        return False
+    pred_counts = Counter(pred_tokens)
+    ref_counts = Counter(ref_tokens)
+    return all(pred_counts[t] >= ref_counts[t] for t in ref_counts)
+
+
 def _candidate_spans(text: str) -> List[str]:
     spans: List[str] = []
     if not text:
@@ -104,16 +129,7 @@ def exact_match(pred: str, ref: str) -> float:
     ref_norm = _canonical_text(ref)
     if pred_norm == ref_norm:
         return 1.0
-    ref_tokens = _canonical_tokens(ref)
-    pred_tokens = _canonical_tokens(pred)
-    if not ref_tokens or not pred_tokens:
-        return float(not ref_tokens and not pred_tokens)
-    if len(ref_tokens) <= 6:
-        pred_counts = Counter(pred_tokens)
-        ref_counts = Counter(ref_tokens)
-        if all(pred_counts[t] >= ref_counts[t] for t in ref_counts):
-            return 1.0
-    return 0.0
+    return 1.0 if _subset_match(pred, ref) else 0.0
 
 
 def f1_score(pred: str, ref: str) -> float:
@@ -121,6 +137,8 @@ def f1_score(pred: str, ref: str) -> float:
     ref_tokens = _canonical_tokens(ref)
     if not pred_tokens or not ref_tokens:
         return float(pred_tokens == ref_tokens)
+    if _subset_match(pred, ref):
+        return 1.0
     common = Counter(pred_tokens) & Counter(ref_tokens)
     num_same = sum(common.values())
     if num_same == 0:
@@ -224,6 +242,8 @@ def anls_score(pred: str, ref: str) -> float:
     ref_norm = _canonical_text(ref)
     if not pred_norm or not ref_norm:
         return float(pred_norm == ref_norm)
+    if _subset_match(pred, ref):
+        return 1.0
     dist = _edit_distance(pred_norm, ref_norm)
     denom = max(len(pred_norm), len(ref_norm), 1)
     score = 1.0 - dist / denom
@@ -277,6 +297,7 @@ def evaluate_model(
     sample_every: Optional[int] = None,
     sample_max: Optional[int] = None,
     is_main_process: bool = True,
+    answer_only: bool = False,
 ) -> Dict[float, Dict[str, float]]:
     logger = logging.getLogger(__name__)
     results: Dict[float, Dict[str, float]] = {}
@@ -357,6 +378,7 @@ def evaluate_model(
                             top_k=top_k,
                             max_new_tokens=max_new_tokens,
                             return_retrieval=True,
+                            answer_only=answer_only,
                         )
                     else:
                         preds = model.generate(
@@ -366,6 +388,7 @@ def evaluate_model(
                             corruption_level=level,
                             top_k=top_k,
                             max_new_tokens=max_new_tokens,
+                            answer_only=answer_only,
                         )
             else:
                 images, questions, pseudo_texts = _apply_corruption(
@@ -377,6 +400,7 @@ def evaluate_model(
                         questions,
                         pseudo_texts if use_pseudo_text else None,
                         max_new_tokens=max_new_tokens,
+                        answer_only=answer_only,
                     )
 
             refs = clean["answers"]

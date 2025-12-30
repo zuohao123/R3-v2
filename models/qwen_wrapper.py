@@ -463,8 +463,11 @@ class QwenVLWrapper:
         return_prompts: bool = False,
         prefix_embeds: Optional[torch.Tensor] = None,
         use_soft_prefix: bool = False,
+        answer_only: bool = False,
     ) -> Any:
         pseudo_texts = pseudo_texts or [""] * len(questions)
+        if answer_only:
+            questions = [f"{q}\nAnswer with a short phrase only." for q in questions]
         prompts = [self.build_prompt(q, p) for q, p in zip(questions, pseudo_texts)]
         inputs = self.processor(
             images=images,

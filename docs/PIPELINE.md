@@ -572,6 +572,9 @@ To print periodic qualitative samples (data + prediction + retrieval), use:
 `--sample_every N --sample_max K`. You can also increase eval throughput with `--batch_size`.
 By default, evaluation reads up to **200 samples** (see `EvalConfig.max_eval_samples`).
 Override with `--max_eval_samples 1000` (or set to a larger number for full eval).
+For more faithful scoring on generative outputs, use:
+- `--answer_only` to instruct the model to answer with a short phrase.
+- `--max_new_tokens N` to control output length (shorter is faster; longer avoids truncation).
 
 ```bash
 python scripts/eval_r3.py \
@@ -581,6 +584,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -598,6 +603,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -636,6 +643,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --eval_log_every 50 \
   --sample_every 200 \
@@ -683,6 +692,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --eval_log_every 50 \
   --sample_every 200 \
@@ -746,6 +757,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --eval_log_every 50 \
   --sample_every 200 \
@@ -792,6 +805,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --eval_log_every 50 \
   --sample_every 200 \
@@ -814,6 +829,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --eval_log_every 50 \
   --sample_every 200 \
@@ -910,6 +927,52 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --sample_every 200 \
   --sample_max 5 \
   --out_json results/r3_ablation_noretr_by_dataset.json
+```
+
+### Background evaluation (nohup)
+Use the same flags as above, but run in the background and log to `logs/`:
+```bash
+mkdir -p logs
+
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_clean_by_dataset.json \
+  > logs/eval_base_clean_by_dataset.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_corrupt_by_dataset.json \
+  > logs/eval_r3_corrupt_by_dataset.log 2>&1 &
 ```
 ### R3 ablation: no retrieval + no prefix + no gate
 ```bash

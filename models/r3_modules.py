@@ -765,6 +765,7 @@ class R3(nn.Module):
         top_k: int,
         max_new_tokens: int,
         return_retrieval: bool = False,
+        answer_only: bool = False,
     ) -> Any:
         if self.config.enable_corruption:
             corr_images, corr_texts, _, _ = self.corruptor(
@@ -875,6 +876,7 @@ class R3(nn.Module):
                 return_prompts=True,
                 prefix_embeds=prefix,
                 use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
+                answer_only=answer_only,
             )
             return answers, retrieved_texts, retrieved_image_paths, contexts, prompts
         answers = self.qwen.generate_answer(
@@ -884,5 +886,6 @@ class R3(nn.Module):
             max_new_tokens=max_new_tokens,
             prefix_embeds=prefix,
             use_soft_prefix=self.config.use_soft_prefix and prefix is not None,
+            answer_only=answer_only,
         )
         return answers

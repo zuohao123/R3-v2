@@ -38,7 +38,7 @@ def _load_image(path: str) -> Image.Image:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preview R3 corruption effects.")
     parser.add_argument("--image", default='data/image.jpg', help="Path to an image file.")
-    parser.add_argument("--text", default='What is the application name?', help="Input text to corrupt.")
+    parser.add_argument("--text", default='How many exercises are there?', help="Input text to corrupt.")
     parser.add_argument(
         "--levels",
         default="0,0.2,0.4,0.6,0.8",
@@ -51,7 +51,12 @@ def main() -> None:
         default=True,
         help="Force at least one corruption per modality for preview.",
     )
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for corruption. Omit or set <0 to randomize each run.",
+    )
     parser.add_argument("--max_severity", type=float, default=None)
     parser.add_argument("--blur_prob", type=float, default=None)
     parser.add_argument("--motion_blur_prob", type=float, default=None)
@@ -133,9 +138,12 @@ def main() -> None:
     levels = _parse_levels(args.levels)
 
     import random
-    random.seed(args.seed)
-    np_seed = args.seed if args.seed is not None else 42
-    np.random.seed(np_seed)
+    seed = args.seed
+    if seed is None or seed < 0:
+        seed = int.from_bytes(os.urandom(4), "little")
+    random.seed(seed)
+    np.random.seed(seed)
+    logging.info("Using seed %d", seed)
 
     for level in levels:
         level = max(0.0, min(1.0, float(level)))

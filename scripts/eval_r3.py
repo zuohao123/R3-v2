@@ -159,6 +159,7 @@ def main() -> None:
     parser.add_argument("--max_eval_samples", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--top_k", type=int, default=3)
+    parser.add_argument("--max_new_tokens", type=int, default=None)
     parser.add_argument(
         "--dataset",
         default=None,
@@ -172,6 +173,7 @@ def main() -> None:
     parser.add_argument("--eval_log_every", type=int, default=None)
     parser.add_argument("--sample_every", type=int, default=None)
     parser.add_argument("--sample_max", type=int, default=None)
+    parser.add_argument("--answer_only", action="store_true")
     parser.add_argument(
         "--eval_mode",
         choices=["r3", "base"],
@@ -239,6 +241,8 @@ def main() -> None:
         cfg.data.num_workers = args.num_workers
     if args.max_eval_samples is not None:
         cfg.evaluation.max_eval_samples = args.max_eval_samples
+    if args.max_new_tokens is not None:
+        cfg.evaluation.max_new_tokens = args.max_new_tokens
     if args.batch_size is not None:
         cfg.evaluation.batch_size = args.batch_size
     cfg.retrieval.index_dir = args.index_dir
@@ -405,6 +409,7 @@ def main() -> None:
                 sample_every=args.sample_every,
                 sample_max=args.sample_max,
                 is_main_process=is_main_process,
+                answer_only=args.answer_only,
             )
             if distributed:
                 results = _reduce_metrics(results, device=cfg.model.device)
@@ -433,6 +438,7 @@ def main() -> None:
         sample_every=args.sample_every,
         sample_max=args.sample_max,
         is_main_process=is_main_process,
+        answer_only=args.answer_only,
     )
     if distributed:
         results = _reduce_metrics(results, device=cfg.model.device)

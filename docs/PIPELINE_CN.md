@@ -462,6 +462,9 @@ tail -f logs/stage5_full.log
 `torchrun --nproc_per_node=8` 即可。
 默认最多评测 **200 条样本**（`EvalConfig.max_eval_samples`），
 可用 `--max_eval_samples 1000` 或更大数值覆盖。
+为使生成式答案更接近真实分数，建议：
+- `--answer_only`：要求模型输出短答案
+- `--max_new_tokens N`：控制输出长度（短更快，长可避免截断）
 
 ### 7.1 基模（Clean + Corrupt）
 ```bash
@@ -474,6 +477,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -491,6 +496,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -509,6 +516,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --out_json results/base_corrupt.json
 ```
 
@@ -524,6 +533,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --out_json results/base_clean_by_dataset.json
 ```
 
@@ -538,6 +549,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --out_json results/base_corrupt_by_dataset.json
 ```
 
@@ -551,7 +564,9 @@ python scripts/eval_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --top_k 3
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32
 ```
 
 ```bash
@@ -563,7 +578,9 @@ python scripts/eval_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --top_k 3
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32
 ```
 
 ### 7.4 R3 按数据集评测
@@ -578,6 +595,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --out_json results/r3_clean_by_dataset.json
 ```
 
@@ -592,6 +611,8 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --out_json results/r3_corrupt_by_dataset.json
 ```
 
@@ -607,6 +628,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -624,6 +647,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -641,6 +666,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -658,6 +685,8 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
@@ -678,12 +707,60 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
   --batch_size 2 \
   --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5 \
   --out_json results/r3_ablation_noretr_by_dataset.json
+```
+
+### 7.4.2 后台评测（nohup）
+评测命令不变，前面加 `nohup` 并写入 `logs/`：
+```bash
+mkdir -p logs
+
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/base_clean_by_dataset.json \
+  > logs/eval_base_clean_by_dataset.log 2>&1 &
+
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_corrupt_by_dataset.json \
+  > logs/eval_r3_corrupt_by_dataset.log 2>&1 &
 ```
 
 ### 7.5 R3 消融评测
