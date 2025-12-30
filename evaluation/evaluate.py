@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import torch
 
 
 def normalize_answer(text: str) -> str:
@@ -180,6 +181,9 @@ def evaluate_model(
     corrupt_text_target: str = "pseudo_text",
     corruptor=None,
     log_every: Optional[int] = None,
+    sample_every: Optional[int] = None,
+    sample_max: Optional[int] = None,
+    is_main_process: bool = True,
 ) -> Dict[float, Dict[str, float]]:
     logger = logging.getLogger(__name__)
     results: Dict[float, Dict[str, float]] = {}
@@ -187,6 +191,9 @@ def evaluate_model(
         raise ValueError(f"Unknown mode: {mode}")
     if use_pseudo_text is None:
         use_pseudo_text = mode == "r3"
+    if not is_main_process:
+        log_every = None
+        sample_every = None
 
     if hasattr(model, "eval"):
         model.eval()
@@ -206,6 +213,8 @@ def evaluate_model(
     for level_idx, level in enumerate(corruption_levels, start=1):
         sums = Counter()
         count = 0
+        samples_logged = 0
+        next_sample_at = sample_every if sample_every and sample_every > 0 else None
         try:
             total_batches = len(dataloader)
         except TypeError:
@@ -216,13 +225,14 @@ def evaluate_model(
                 log_every = max(1, total_batches // 20)
             else:
                 log_every = 50
-        logger.info(
-            "Eval level %.2f (%d/%d) start | batches %s",
-            level,
-            level_idx,
-            total_levels,
-            total_batches if total_batches is not None else "unknown",
-        )
+        if is_main_process:
+            logger.info(
+                "Eval level %.2f (%d/%d) start | batches %s",
+                level,
+                level_idx,
+                total_levels,
+                total_batches if total_batches is not None else "unknown",
+            )
         for batch in dataloader:
             clean = batch["clean"]
             corrupted = batch["corrupted"]
@@ -230,60 +240,113 @@ def evaluate_model(
             questions = corrupted["questions"]
             pseudo_texts = corrupted["pseudo_texts"]
 
+            batch_size = len(questions)
+            want_sample = (
+                is_main_process
+                and next_sample_at is not None
+                and (count + batch_size) >= next_sample_at
+            )
+
             if mode == "r3":
                 if not use_pseudo_text:
                     pseudo_texts = ["" for _ in questions]
-                preds = model.generate(
-                    images,
-                    questions,
-                    pseudo_texts,
-                    corruption_level=level,
-                    top_k=top_k,
-                    max_new_tokens=max_new_tokens,
-                )
+                with torch.no_grad():
+                    if want_sample:
+                        preds, retrieved_texts, retrieved_images, contexts, prompts = model.generate(
+                            images,
+                            questions,
+                            pseudo_texts,
+                            corruption_level=level,
+                            top_k=top_k,
+                            max_new_tokens=max_new_tokens,
+                            return_retrieval=True,
+                        )
+                    else:
+                        preds = model.generate(
+                            images,
+                            questions,
+                            pseudo_texts,
+                            corruption_level=level,
+                            top_k=top_k,
+                            max_new_tokens=max_new_tokens,
+                        )
             else:
                 images, questions, pseudo_texts = _apply_corruption(
                     corruptor, images, questions, pseudo_texts, level, corrupt_text_target
                 )
-                preds = model.generate_answer(
-                    images,
-                    questions,
-                    pseudo_texts if use_pseudo_text else None,
-                    max_new_tokens=max_new_tokens,
-                )
+                with torch.no_grad():
+                    preds = model.generate_answer(
+                        images,
+                        questions,
+                        pseudo_texts if use_pseudo_text else None,
+                        max_new_tokens=max_new_tokens,
+                    )
 
             refs = clean["answers"]
+            count_before = count
             for pred, ref in zip(preds, refs):
                 sums.update(_compute_metrics(pred, ref))
                 count += 1
-            if count % log_every == 0:
+            if want_sample and is_main_process:
+                sample_idx = max(0, min(len(preds) - 1, next_sample_at - count_before - 1))
+                img_path = clean["image_paths"][sample_idx]
+                question = questions[sample_idx]
+                answer = refs[sample_idx]
+                pseudo = pseudo_texts[sample_idx] if use_pseudo_text else ""
+                pred_text = preds[sample_idx]
+                logger.info("Eval sample (level %.2f | idx %d):", level, next_sample_at)
+                logger.info("  DATA image_path: %s", img_path)
+                logger.info("  DATA question: %s", _truncate(question))
+                logger.info("  DATA answer(gt): %s", _truncate(answer))
+                logger.info("  DATA pseudo_text: %s", _truncate(pseudo))
+                logger.info("  MODEL pred: %s", _truncate(pred_text))
+                if mode == "r3" and want_sample:
+                    if retrieved_texts:
+                        shown = retrieved_texts[sample_idx][: min(3, len(retrieved_texts[sample_idx]))]
+                        logger.info("  RETRIEVAL texts: %s", " || ".join(_truncate(t) for t in shown))
+                    if retrieved_images:
+                        shown_imgs = retrieved_images[sample_idx][: min(3, len(retrieved_images[sample_idx]))]
+                        logger.info("  RETRIEVAL images: %s", " || ".join(_truncate(p) for p in shown_imgs))
+                    if "contexts" in locals():
+                        logger.info("  MODEL context: %s", _truncate(contexts[sample_idx], 400))
+                    if "prompts" in locals():
+                        logger.info("  MODEL input_text: %s", _truncate(prompts[sample_idx], 400))
+                samples_logged += 1
+                if sample_max is not None and samples_logged >= sample_max:
+                    next_sample_at = None
+                elif next_sample_at is not None:
+                    next_sample_at += sample_every if sample_every else 0
+
+            if log_every is not None and count % log_every == 0:
                 elapsed = time.time() - level_start
                 eta = None
                 if total_batches:
                     completed = min(count, total_batches)
                     eta = elapsed / max(completed, 1) * (total_batches - completed)
-                logger.info(
-                    "Eval level %.2f (%d/%d) | done %s/%s | elapsed %s | eta %s",
-                    level,
-                    level_idx,
-                    total_levels,
-                    count,
-                    total_batches if total_batches is not None else "?",
-                    _format_seconds(elapsed),
-                    _format_seconds(eta) if eta is not None else "n/a",
-                )
+                if is_main_process:
+                    logger.info(
+                        "Eval level %.2f (%d/%d) | done %s/%s | elapsed %s | eta %s",
+                        level,
+                        level_idx,
+                        total_levels,
+                        count,
+                        total_batches if total_batches is not None else "?",
+                        _format_seconds(elapsed),
+                        _format_seconds(eta) if eta is not None else "n/a",
+                    )
         if return_sums:
             results[level] = {"count": float(count), **sums}
         else:
             results[level] = {k: v / max(1.0, count) for k, v in sums.items()}
-        logger.info(
-            "Eval level %.2f (%d/%d) done | samples %d | elapsed %s",
-            level,
-            level_idx,
-            total_levels,
-            count,
-            _format_seconds(time.time() - level_start),
-        )
+        if is_main_process:
+            logger.info(
+                "Eval level %.2f (%d/%d) done | samples %d | elapsed %s",
+                level,
+                level_idx,
+                total_levels,
+                count,
+                _format_seconds(time.time() - level_start),
+            )
     return results
 
 
@@ -302,3 +365,9 @@ def _format_seconds(seconds: Optional[float]) -> str:
     if hours > 0:
         return f"{hours}h{mins:02d}m{secs:02d}s"
     return f"{mins:02d}m{secs:02d}s"
+
+
+def _truncate(text: str, limit: int = 300) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."

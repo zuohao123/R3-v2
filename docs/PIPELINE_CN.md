@@ -1,31 +1,40 @@
-# R3++ End-to-End Pipeline (Download → Build → Train → Eval)
+# R3++ 全流程实验管线（下载 → 预处理 → 索引 → 训练 → 评测）
 
-This runbook assumes you want to train a **single unified model** across ScreenQA + ChartQA + InfoVQA.
-It also flags current limitations around full fine-tuning on 8x V100.
+本文档为中文版实验操作手册，覆盖数据下载、OCR、统一数据格式、索引构建、分阶段训练和评测（含消融与不同腐蚀强度）。
+默认基座模型与检索模型已在 `models/` 下。
 
-## 0) Environment Setup
+---
+
+## 0) 环境与依赖
 
 ```bash
 pip install --upgrade pip
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install transformers datasets pillow sentence-transformers peft
 pip install huggingface-hub
-pip install faiss-gpu  # or faiss-cpu if you do not have CUDA
+pip install faiss-gpu  # 或 faiss-cpu
 ```
 
-## 0.5) Download Retrieval Backbones (CLIP + Text Encoder)
+如需更快下载 Hugging Face 数据集：
+```bash
+export HF_TOKEN=你的token
+```
+
+---
+
+## 0.5) 下载检索模型（CLIP + 文本编码器）
 
 ```bash
 python scripts/download_retrieval_models.py --out_dir models
 ```
 
-This writes:
+默认输出：
 - `models/clip-vit-b32-laion2B`
 - `models/all-MiniLM-L6-v2`
 
-These paths are now the default in `config/train_config.py`.
+---
 
-## 1) Download Raw Datasets
+## 1) 下载原始数据
 
 ```bash
 python scripts/download_screenqa.py --out_dir data/raw/screenqa
@@ -33,22 +42,20 @@ python scripts/download_chartqa.py --out_dir data/raw/chartqa
 python scripts/download_infographicvqa.py --out_dir data/raw/infovqa
 ```
 
-This produces:
+输出结构：
 - `data/raw/<dataset>/images/*.png`
 - `data/raw/<dataset>/*_raw_<split>.jsonl`
 
-## 2) Build Unified JSONL (with image_prefix)
+---
 
-## 2a) Build OCR Cache (Recommended for high-quality pseudo-text)
+## 2) OCR 缓存（推荐，用于高质量 pseudo-text）
 
-Install OCR engine (recommended):
+建议用 PaddleOCR（速度较好，输出更稳定）：
 ```bash
 pip install paddleocr
 ```
 
-Optional (GPU): install paddlepaddle for CUDA that matches your system.
-
-Build OCR cache per dataset (uses existing raw JSONL + images):
+单机：
 ```bash
 python scripts/build_ocr_cache.py \
   --raw_dir data/raw/screenqa \
@@ -78,7 +85,7 @@ python scripts/build_ocr_cache.py \
   --use_gpu
 ```
 
-Multi-GPU OCR (8x V100) with sharding:
+多卡并行 OCR（8x V100）：
 ```bash
 torchrun --nproc_per_node=8 scripts/build_ocr_cache.py \
   --raw_dir data/raw/screenqa \
@@ -94,7 +101,10 @@ torchrun --nproc_per_node=8 scripts/build_ocr_cache.py \
 python scripts/build_ocr_cache.py --out_path data/ocr/screenqa_ocr.jsonl --merge_shards 8
 ```
 
-Then rebuild unified JSON with OCR:
+---
+
+## 3) 构建统一格式 JSONL（含 OCR）
+
 ```bash
 python data/preprocess/build_unified_json.py \
   --dataset screenqa \
@@ -118,47 +128,16 @@ python data/preprocess/build_unified_json.py \
   --ocr_cache data/ocr/infovqa_ocr.jsonl
 ```
 
-Or use the one-shot helper (rebuild unified + indices):
-```bash
-python scripts/rebuild_unified_indices.py \
-  --raw_root data/raw \
-  --out_dir data/unified \
-  --image_root data/raw \
-  --index_dir indices \
-  --ocr_root data/ocr
-```
-
-To **merge datasets into a single training set**, make sure each sample keeps a dataset prefix so
-`image_root` can be shared across datasets.
-
-```bash
-python data/preprocess/build_unified_json.py \
-  --dataset screenqa \
-  --raw_dir data/raw/screenqa \
-  --out_dir data/unified \
-  --image_prefix screenqa
-
-python data/preprocess/build_unified_json.py \
-  --dataset chartqa \
-  --raw_dir data/raw/chartqa \
-  --out_dir data/unified \
-  --image_prefix chartqa
-
-python data/preprocess/build_unified_json.py \
-  --dataset infovqa \
-  --raw_dir data/raw/infovqa \
-  --out_dir data/unified \
-  --image_prefix infovqa
-```
-
-Resulting `image_path` will look like:
+统一 `image_path` 会带前缀，如：
 - `screenqa/images/train_0.png`
 - `chartqa/images/validation_123.png`
 - `infovqa/images/test_4.png`
 
-Then set `image_root=data/raw` during training/evaluation.
+训练/评测时设置 `image_root=data/raw` 即可共享根路径。
 
-## 3) Merge Unified JSONL Files
+---
+
+## 4) 合并训练集与验证集
 
 ```bash
 cat data/unified/screenqa_unified_train.jsonl \
@@ -172,8 +151,11 @@ cat data/unified/screenqa_unified_val.jsonl \
   > data/unified/val.jsonl
 ```
 
-## 4) Build Retrieval Indices (FAISS)
+---
 
+## 5) 构建检索索引（FAISS）
+
+单机：
 ```bash
 python scripts/build_indices.py \
   --jsonl data/unified/train.jsonl \
@@ -182,8 +164,7 @@ python scripts/build_indices.py \
   --text_field ocr
 ```
 
-## 4b) Build Retrieval Indices (Multi-GPU Sharding)
-
+多卡分片（8x V100）：
 ```bash
 torchrun --nproc_per_node=8 scripts/build_indices.py \
   --jsonl data/unified/train.jsonl \
@@ -196,88 +177,17 @@ torchrun --nproc_per_node=8 scripts/build_indices.py \
 python scripts/build_indices.py --out_dir indices --merge_shards 8
 ```
 
-## 5) Train (Single GPU / LoRA recommended first)
+---
 
-```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+## 6) 训练（推荐分阶段）
 
-python scripts/train_r3.py \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --fp16 \
-  --batch_size 1 \
-  --sampling_alpha 0.5 \
-  --adam_eps 1e-6 \
-  --use_lora \
-  --lora_targets v_proj,o_proj \
-  --disable_teacher \
-  --gradient_checkpointing
-```
+### 训练说明（方法设计）
+- R3++ 采用 **腐蚀模拟 + 双通道检索 + 三路径重建**。
+- 训练采用 **clean → warm-up → joint → 强腐蚀** 的课程学习。
+- Stage5 使用 **EMA Teacher**，避免复制完整教师导致 OOM。
+- 建议 `max_length=2048`；`4096` 在多卡下可能引发 NCCL 超时或卡住。
 
-## 5b) Train with FSDP (8x V100, LoRA recommended)
-
-```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --fp16 \
-  --batch_size 1 \
-  --sampling_alpha 0.5 \
-  --grad_accum 4 \
-  --fsdp_min_params 10000000 \
-  --adam_eps 1e-6 \
-  --use_lora \
-  --lora_targets v_proj,o_proj \
-  --disable_teacher \
-  --gradient_checkpointing
-```
-
-## 5c) Train with DeepSpeed ZeRO-3 (8x V100)
-
-```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-
-deepspeed --num_gpus=8 scripts/train_r3.py \
-  --backend deepspeed \
-  --deepspeed_config configs/deepspeed_zero3.json \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --fp16 \
-  --batch_size 1 \
-  --sampling_alpha 0.5 \
-  --grad_accum 4 \
-  --adam_eps 1e-6 \
-  --use_lora \
-  --lora_targets v_proj,o_proj \
-  --disable_teacher \
-  --gradient_checkpointing
-```
-
-Note: DeepSpeed checkpoints are sharded. To export a full FP16 model for evaluation, use:
-```bash
-python -m deepspeed.utils.zero_to_fp32 \
-  --input_dir checkpoints/step_1000 \
-  --output_file checkpoints/step_1000/pytorch_model.bin
-```
-
-## 5d) Staged Training (recommended, 8x V100)
-
-Stage 1 (clean LoRA adaptation, no retrieval/corruption):
+### Stage 1：纯净 LoRA 适配（无检索、无腐蚀）
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -300,7 +210,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 2 (text retrieval warm-up, text-only path):
+### Stage 2：文本检索 warm-up（文本路径）
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -325,7 +235,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 3 (image retrieval warm-up, visual memory):
+### Stage 3：图像检索 warm-up（视觉记忆）
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -354,7 +264,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 4 (joint, clean):
+### Stage 4：clean 联合训练
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -378,7 +288,7 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Stage 5 (full training with strong corruption + EMA teacher):
+### Stage 5：全量训练（强腐蚀 + EMA Teacher）
 ```bash
 torchrun --nproc_per_node=8 scripts/train_r3.py \
   --backend fsdp \
@@ -407,33 +317,9 @@ torchrun --nproc_per_node=8 scripts/train_r3.py \
   --r3_fp32
 ```
 
-Optional (long-context tail, short run):
-```bash
-torchrun --nproc_per_node=8 scripts/train_r3.py \
-  --backend fsdp \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --train_jsonl data/unified/train.jsonl \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --output_dir checkpoints/stage5_full_long \
-  --resume_from checkpoints/stage5_full/step_10000 \
-  --fp16 --use_lora \
-  --batch_size 1 --grad_accum 2 \
-  --learning_rate 5e-7 \
-  --max_length 4096 --max_context_chars 128 \
-  --max_steps 300 --save_every 300 --eval_every 1000000 \
-  --sample_every 0 --num_workers 0 \
-  --max_corruption 0.9 \
-  --corruption_warmup_steps 1 \
-  --corruption_total_steps 300 \
-  --r3_fp32
-```
+---
 
-### Background Execution (nohup)
-
-If you want to run the staged jobs in the background, use `nohup` and write logs to `logs/`.
-Below are ready-to-run background variants for each stage (same arguments as above).
+## 6b) 后台训练命令（nohup）
 
 ```bash
 mkdir -p logs
@@ -559,21 +445,28 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   > logs/stage5_full.log 2>&1 &
 ```
 
-To monitor a stage:
+查看训练日志：
 ```bash
 tail -f logs/stage5_full.log
 ```
 
-## 6) Evaluate
+---
 
-Evaluation already logs progress per corruption level (done/total batches and ETA).
-If you want more frequent progress updates, pass `--eval_log_every` (or reduce `--max_eval_samples`).
-To print periodic qualitative samples (data + prediction + retrieval), use:
-`--sample_every N --sample_max K`. You can also increase eval throughput with `--batch_size`.
+## 7) 评测（基模 / R3 / 消融 / 分数据集）
 
+评测阶段默认会打印进度日志（每个腐蚀等级的 batch 进度与 ETA）。
+如果需要更频繁的日志，可加 `--eval_log_every`。
+如需定期打印样例（数据详情+预测+检索），可加：
+`--sample_every N --sample_max K`。也可通过 `--batch_size` 提升评测吞吐。
+下方所有评测/消融命令都支持多卡：把 `python` 替换为
+`torchrun --nproc_per_node=8` 即可。
+
+### 7.1 基模（Clean + Corrupt）
 ```bash
 python scripts/eval_r3.py \
-  --checkpoint_dir checkpoints/step_1000 \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
   --model_name models/Qwen3-VL-8B-Instruct \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
@@ -585,7 +478,7 @@ python scripts/eval_r3.py \
   --sample_max 5
 ```
 
-### Multi-GPU evaluation (faster)
+### 多卡评测（更快）
 ```bash
 torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --eval_mode r3 \
@@ -601,54 +494,6 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --sample_max 5
 ```
 
-## 6b) Evaluate Base vs R3 (Clean + Corrupted)
-
-All evaluation/ablation commands below support multi-GPU: replace `python` with
-`torchrun --nproc_per_node=8` and add `--batch_size`, `--eval_log_every`,
-`--sample_every`, `--sample_max` as needed.
-
-### Base model (clean, no pseudo-text)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode base \
-  --clean_only \
-  --no_pseudo_text \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3
-```
-
-### Base model (per-dataset, clean)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode base \
-  --clean_only \
-  --no_pseudo_text \
-  --dataset_prefixes screenqa,chartqa,infovqa \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --out_json results/base_clean_by_dataset.json
-```
-
-### Base model (clean, use pseudo-text)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode base \
-  --clean_only \
-  --use_pseudo_text \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3
-```
-
-### Base model only (corruption sweep, no R3 / no retrieval)
 ```bash
 python scripts/eval_r3.py \
   --eval_mode base \
@@ -663,7 +508,21 @@ python scripts/eval_r3.py \
   --out_json results/base_corrupt.json
 ```
 
-### Base model (per-dataset, corruption sweep)
+### 7.2 基模（按数据集评测）
+```bash
+python scripts/eval_r3.py \
+  --eval_mode base \
+  --clean_only \
+  --no_pseudo_text \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --out_json results/base_clean_by_dataset.json
+```
+
 ```bash
 python scripts/eval_r3.py \
   --eval_mode base \
@@ -678,38 +537,7 @@ python scripts/eval_r3.py \
   --out_json results/base_corrupt_by_dataset.json
 ```
 
-### Base model only (image-only corruption)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode base \
-  --corruption_levels 0,0.2,0.4,0.6,0.8 \
-  --no_pseudo_text \
-  --corrupt_text_target none \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --out_json results/base_corrupt_image_only.json
-```
-
-### Base model (text-only corruption)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode base \
-  --corruption_levels 0,0.2,0.4,0.6,0.8 \
-  --no_pseudo_text \
-  --corrupt_text_target question \
-  --disable_corruption \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3 \
-  --out_json results/base_corrupt_text_only.json
-```
-
-### R3 model (clean)
+### 7.3 R3 模型（Clean + Corrupt）
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -722,7 +550,19 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
-### R3 model (per-dataset, clean)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --corruption_levels 0,0.2,0.4,0.6,0.8 \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3
+```
+
+### 7.4 R3 按数据集评测
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -737,34 +577,6 @@ python scripts/eval_r3.py \
   --out_json results/r3_clean_by_dataset.json
 ```
 
-### R3 model (clean, no pseudo-text)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode r3 \
-  --clean_only \
-  --no_pseudo_text \
-  --checkpoint_dir checkpoints/step_1000 \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3
-```
-
-### R3 model (corruption sweep)
-```bash
-python scripts/eval_r3.py \
-  --eval_mode r3 \
-  --corruption_levels 0,0.2,0.4,0.6,0.8 \
-  --checkpoint_dir checkpoints/step_1000 \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3
-```
-
-### R3 model (per-dataset, corruption sweep)
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -778,7 +590,8 @@ python scripts/eval_r3.py \
   --top_k 3 \
   --out_json results/r3_corrupt_by_dataset.json
 ```
-### R3 ablation: no retrieval + no prefix + no gate
+
+### 7.5 R3 消融评测
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -795,7 +608,6 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
-### R3 ablation: no visual memory + no latent tokens
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -810,22 +622,12 @@ python scripts/eval_r3.py \
   --top_k 3
 ```
 
-### R3 ablation: disable soft prefix
-```bash
-python scripts/eval_r3.py \
-  --eval_mode r3 \
-  --clean_only \
-  --disable_soft_prefix \
-  --checkpoint_dir checkpoints/step_1000 \
-  --model_name models/Qwen3-VL-8B-Instruct \
-  --val_jsonl data/unified/val.jsonl \
-  --image_root data/raw \
-  --index_dir indices \
-  --top_k 3
-```
+---
 
-## Multi-GPU / Model-Parallel Notes (8x V100)
+## 8) 实验设计与评估方法说明（文本版）
 
-- **Use fp16 on V100** (bf16 is not supported).
-- **LoRA + gradient checkpointing + disable_teacher** are the fastest ways to avoid OOM.
-- FSDP and DeepSpeed ZeRO-3 are integrated; pipeline/tensor parallel is not.
+- 数据集：ScreenQA、ChartQA、InfographicVQA。
+- 目标：在 **部分模态缺失/腐蚀** 条件下做生成式多模态 QA。
+- 方法：R3++ = 腐蚀模拟 + 文本/图像双通道检索 + 三路径重建 + 自适应门控 + clean/corrupt 一致性。
+- 训练策略：clean → 单通道 warm-up → clean joint → 强腐蚀 + EMA teacher。
+- 评测：在 `corruption_levels` 的不同强度下评测，报告 EM/F1/BLEU/ROUGE（代码内已实现）。如需 ANLS 等指标可后续扩展。
