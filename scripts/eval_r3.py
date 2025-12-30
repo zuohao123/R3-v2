@@ -327,6 +327,7 @@ def main() -> None:
                     torch.load(r3_state, map_location=qwen.device),
                     strict=False,
                 )
+        r3.to(qwen.device)
 
     dataset = UnifiedQADataset(
         cfg.data.val_jsonl,
