@@ -20,13 +20,105 @@ def normalize_answer(text: str) -> str:
     return " ".join(text.split())
 
 
+_NUM_WORDS = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "no": "0",
+    "none": "0",
+    "nil": "0",
+}
+
+
+def _canonical_tokens(text: str) -> List[str]:
+    tokens = normalize_answer(text).split()
+    return [_NUM_WORDS.get(tok, tok) for tok in tokens]
+
+
+def _canonical_text(text: str) -> str:
+    return " ".join(_canonical_tokens(text))
+
+
+def _candidate_spans(text: str) -> List[str]:
+    spans: List[str] = []
+    if not text:
+        return spans
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            spans.append(line)
+    for sent in re.split(r"(?<=[.!?])\\s+", text.strip()):
+        sent = sent.strip()
+        if sent:
+            spans.append(sent)
+    for match in re.findall(r"\"([^\"]+)\"|'([^']+)'", text):
+        cand = match[0] or match[1]
+        cand = cand.strip()
+        if cand:
+            spans.append(cand)
+    for pat in (r"answer is\\s*[:\\-]*\\s*(.+)", r"answer\\s*[:\\-]\\s*(.+)"):
+        m = re.search(pat, text, flags=re.IGNORECASE)
+        if m:
+            tail = m.group(1).strip()
+            tail = re.split(r"[\\n\\.]", tail, maxsplit=1)[0].strip()
+            if tail:
+                spans.append(tail)
+    # De-duplicate while preserving order.
+    seen = set()
+    uniq = []
+    for s in spans:
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(s)
+    return uniq
+
+
+def _select_best_pred(pred: str, ref: str) -> str:
+    candidates = _candidate_spans(pred)
+    if not candidates:
+        return pred
+    best = candidates[0]
+    best_score = f1_score(best, ref)
+    best_len = len(best)
+    for cand in candidates[1:]:
+        score = f1_score(cand, ref)
+        if score > best_score or (score == best_score and len(cand) < best_len):
+            best = cand
+            best_score = score
+            best_len = len(cand)
+    return best
+
+
 def exact_match(pred: str, ref: str) -> float:
-    return float(normalize_answer(pred) == normalize_answer(ref))
+    pred_norm = _canonical_text(pred)
+    ref_norm = _canonical_text(ref)
+    if pred_norm == ref_norm:
+        return 1.0
+    ref_tokens = _canonical_tokens(ref)
+    pred_tokens = _canonical_tokens(pred)
+    if not ref_tokens or not pred_tokens:
+        return float(not ref_tokens and not pred_tokens)
+    if len(ref_tokens) <= 6:
+        pred_counts = Counter(pred_tokens)
+        ref_counts = Counter(ref_tokens)
+        if all(pred_counts[t] >= ref_counts[t] for t in ref_counts):
+            return 1.0
+    return 0.0
 
 
 def f1_score(pred: str, ref: str) -> float:
-    pred_tokens = normalize_answer(pred).split()
-    ref_tokens = normalize_answer(ref).split()
+    pred_tokens = _canonical_tokens(pred)
+    ref_tokens = _canonical_tokens(ref)
     if not pred_tokens or not ref_tokens:
         return float(pred_tokens == ref_tokens)
     common = Counter(pred_tokens) & Counter(ref_tokens)
@@ -39,7 +131,7 @@ def f1_score(pred: str, ref: str) -> float:
 
 
 def _try_parse_float(text: str) -> Optional[float]:
-    cleaned = normalize_answer(text)
+    cleaned = _canonical_text(text)
     cleaned = cleaned.replace(",", "")
     match = re.search(r"-?\\d+(?:\\.\\d+)?", cleaned)
     if not match:
@@ -65,8 +157,8 @@ def _ngram_counts(tokens: List[str], n: int) -> Counter:
 
 
 def bleu_score(pred: str, ref: str, max_n: int = 4) -> float:
-    pred_tokens = normalize_answer(pred).split()
-    ref_tokens = normalize_answer(ref).split()
+    pred_tokens = _canonical_tokens(pred)
+    ref_tokens = _canonical_tokens(ref)
     if not pred_tokens or not ref_tokens:
         return 0.0
     precisions = []
@@ -93,8 +185,8 @@ def _lcs_len(a: List[str], b: List[str]) -> int:
 
 
 def rouge_l(pred: str, ref: str) -> float:
-    pred_tokens = normalize_answer(pred).split()
-    ref_tokens = normalize_answer(ref).split()
+    pred_tokens = _canonical_tokens(pred)
+    ref_tokens = _canonical_tokens(ref)
     if not pred_tokens or not ref_tokens:
         return 0.0
     lcs = _lcs_len(pred_tokens, ref_tokens)
@@ -128,8 +220,8 @@ def _edit_distance(a: str, b: str) -> int:
 
 def anls_score(pred: str, ref: str) -> float:
     """ANLS metric used in TextVQA/InfoVQA."""
-    pred_norm = normalize_answer(pred)
-    ref_norm = normalize_answer(ref)
+    pred_norm = _canonical_text(pred)
+    ref_norm = _canonical_text(ref)
     if not pred_norm or not ref_norm:
         return float(pred_norm == ref_norm)
     dist = _edit_distance(pred_norm, ref_norm)
@@ -139,6 +231,7 @@ def anls_score(pred: str, ref: str) -> float:
 
 
 def _compute_metrics(pred: str, ref: str) -> Dict[str, float]:
+    pred = _select_best_pred(pred, ref)
     return {
         "exact_match": exact_match(pred, ref),
         "f1": f1_score(pred, ref),
@@ -298,12 +391,14 @@ def evaluate_model(
                 answer = refs[sample_idx]
                 pseudo = pseudo_texts[sample_idx] if use_pseudo_text else ""
                 pred_text = preds[sample_idx]
+                pred_best = _select_best_pred(pred_text, answer)
                 logger.info("Eval sample (level %.2f | idx %d):", level, next_sample_at)
                 logger.info("  DATA image_path: %s", img_path)
                 logger.info("  DATA question: %s", _truncate(question))
                 logger.info("  DATA answer(gt): %s", _truncate(answer))
                 logger.info("  DATA pseudo_text: %s", _truncate(pseudo))
-                logger.info("  MODEL pred: %s", _truncate(pred_text))
+                logger.info("  MODEL pred_raw: %s", _truncate(pred_text))
+                logger.info("  MODEL pred_best: %s", _truncate(pred_best))
                 if mode == "r3" and want_sample:
                     if retrieved_texts:
                         shown = retrieved_texts[sample_idx][: min(3, len(retrieved_texts[sample_idx]))]
