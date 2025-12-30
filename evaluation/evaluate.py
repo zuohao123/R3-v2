@@ -15,8 +15,14 @@ import torch
 
 def normalize_answer(text: str) -> str:
     text = text.lower()
+    text = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text)
+    text = text.replace("a.m.", "am").replace("p.m.", "pm")
+    text = text.replace("a.m", "am").replace("p.m", "pm")
+    text = text.replace("o'clock", "oclock")
+    text = text.replace("%", " percent ")
     text = re.sub(r"\b(a|an|the)\b", " ", text)
     text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\b([ap])\s+m\b", r"\1m", text)
     return " ".join(text.split())
 
 
@@ -32,15 +38,128 @@ _NUM_WORDS = {
     "eight": "8",
     "nine": "9",
     "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+    "thirteen": "13",
+    "fourteen": "14",
+    "fifteen": "15",
+    "sixteen": "16",
+    "seventeen": "17",
+    "eighteen": "18",
+    "nineteen": "19",
+    "first": "1",
+    "second": "2",
+    "third": "3",
+    "fourth": "4",
+    "fifth": "5",
+    "sixth": "6",
+    "seventh": "7",
+    "eighth": "8",
+    "ninth": "9",
+    "tenth": "10",
     "no": "0",
     "none": "0",
     "nil": "0",
 }
+_UNIT_TOKENS = {
+    "percentage": "percent",
+    "percent": "percent",
+    "pct": "percent",
+}
+_DROP_TOKENS = {"oclock"}
+
+_UNITS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+}
+_TEENS = {
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+}
+_TENS = {
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+_SCALES = {"hundred": 100, "thousand": 1000}
+
+
+def _collapse_number_words(tokens: List[str]) -> List[str]:
+    out: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok not in _UNITS and tok not in _TEENS and tok not in _TENS and tok not in _SCALES and tok != "and":
+            out.append(tok)
+            i += 1
+            continue
+        total = 0
+        current = 0
+        consumed = False
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok == "and":
+                i += 1
+                continue
+            if tok in _UNITS:
+                current += _UNITS[tok]
+            elif tok in _TEENS:
+                current += _TEENS[tok]
+            elif tok in _TENS:
+                current += _TENS[tok]
+            elif tok in _SCALES:
+                scale = _SCALES[tok]
+                if current == 0:
+                    current = 1
+                current *= scale
+                if scale >= 1000:
+                    total += current
+                    current = 0
+            else:
+                break
+            consumed = True
+            i += 1
+        if consumed:
+            total += current
+            out.append(str(total))
+        else:
+            out.append(tokens[i])
+            i += 1
+    return out
 
 
 def _canonical_tokens(text: str) -> List[str]:
     tokens = normalize_answer(text).split()
-    return [_NUM_WORDS.get(tok, tok) for tok in tokens]
+    normalized: List[str] = []
+    for tok in tokens:
+        tok = _NUM_WORDS.get(tok, tok)
+        tok = _UNIT_TOKENS.get(tok, tok)
+        if tok in _DROP_TOKENS:
+            continue
+        normalized.append(tok)
+    normalized = _collapse_number_words(normalized)
+    return normalized
 
 
 def _canonical_text(text: str) -> str:
@@ -58,11 +177,21 @@ def _numeric_match(pred: str, ref: str, tol: float = 0.0) -> bool:
     return abs(pred_num - ref_num) < 1e-6
 
 
+def _contains_meridiem(tokens: List[str]) -> Optional[str]:
+    for tok in tokens:
+        if tok in {"am", "pm"}:
+            return tok
+    return None
+
+
 def _subset_match(pred: str, ref: str, max_ref_tokens: int = 6) -> bool:
     ref_tokens = _canonical_tokens(ref)
     pred_tokens = _canonical_tokens(pred)
     if not ref_tokens or not pred_tokens:
         return bool(ref_tokens == pred_tokens)
+    ref_mer = _contains_meridiem(ref_tokens)
+    if ref_mer and ref_mer not in pred_tokens:
+        return False
     if _numeric_match(pred, ref):
         return True
     if len(ref_tokens) > max_ref_tokens:
