@@ -225,6 +225,8 @@ def evaluate_model(
                 log_every = max(1, total_batches // 20)
             else:
                 log_every = 50
+        elif total_batches and log_every > total_batches:
+            log_every = max(1, total_batches // 5)
         if is_main_process:
             logger.info(
                 "Eval level %.2f (%d/%d) start | batches %s",
@@ -233,7 +235,9 @@ def evaluate_model(
                 total_levels,
                 total_batches if total_batches is not None else "unknown",
             )
+        batch_idx = 0
         for batch in dataloader:
+            batch_idx += 1
             clean = batch["clean"]
             corrupted = batch["corrupted"]
             images = corrupted["images"]
@@ -317,20 +321,23 @@ def evaluate_model(
                 elif next_sample_at is not None:
                     next_sample_at += sample_every if sample_every else 0
 
-            if log_every is not None and count % log_every == 0:
+            if log_every is not None and (
+                batch_idx % log_every == 0 or (total_batches and batch_idx == total_batches)
+            ):
                 elapsed = time.time() - level_start
                 eta = None
                 if total_batches:
-                    completed = min(count, total_batches)
+                    completed = min(batch_idx, total_batches)
                     eta = elapsed / max(completed, 1) * (total_batches - completed)
                 if is_main_process:
                     logger.info(
-                        "Eval level %.2f (%d/%d) | done %s/%s | elapsed %s | eta %s",
+                        "Eval level %.2f (%d/%d) | done %s/%s batches | samples %d | elapsed %s | eta %s",
                         level,
                         level_idx,
                         total_levels,
-                        count,
+                        batch_idx,
                         total_batches if total_batches is not None else "?",
+                        count,
                         _format_seconds(elapsed),
                         _format_seconds(eta) if eta is not None else "n/a",
                     )
