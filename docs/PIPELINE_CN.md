@@ -460,6 +460,8 @@ tail -f logs/stage5_full.log
 `--sample_every N --sample_max K`。也可通过 `--batch_size` 提升评测吞吐。
 下方所有评测/消融命令都支持多卡：把 `python` 替换为
 `torchrun --nproc_per_node=8` 即可。
+默认最多评测 **200 条样本**（`EvalConfig.max_eval_samples`），
+可用 `--max_eval_samples 1000` 或更大数值覆盖。
 
 ### 7.1 基模（Clean + Corrupt）
 ```bash
@@ -473,6 +475,7 @@ python scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --batch_size 2 \
+  --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5
@@ -489,6 +492,7 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --batch_size 2 \
+  --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5

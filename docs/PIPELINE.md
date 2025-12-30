@@ -570,6 +570,8 @@ Evaluation already logs progress per corruption level (done/total batches and ET
 If you want more frequent progress updates, pass `--eval_log_every` (or reduce `--max_eval_samples`).
 To print periodic qualitative samples (data + prediction + retrieval), use:
 `--sample_every N --sample_max K`. You can also increase eval throughput with `--batch_size`.
+By default, evaluation reads up to **200 samples** (see `EvalConfig.max_eval_samples`).
+Override with `--max_eval_samples 1000` (or set to a larger number for full eval).
 
 ```bash
 python scripts/eval_r3.py \
@@ -580,6 +582,7 @@ python scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --batch_size 2 \
+  --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5
@@ -596,6 +599,7 @@ torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --index_dir indices \
   --top_k 3 \
   --batch_size 2 \
+  --max_eval_samples 1000 \
   --eval_log_every 50 \
   --sample_every 200 \
   --sample_max 5
@@ -632,6 +636,10 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
   --out_json results/base_clean_by_dataset.json
 ```
 
@@ -675,6 +683,10 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
   --out_json results/base_corrupt_by_dataset.json
 ```
 
@@ -734,6 +746,10 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
   --out_json results/r3_clean_by_dataset.json
 ```
 
@@ -776,7 +792,33 @@ python scripts/eval_r3.py \
   --image_root data/raw \
   --index_dir indices \
   --top_k 3 \
+  --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
   --out_json results/r3_corrupt_by_dataset.json
+```
+
+### R3 ablation (per-dataset)
+```bash
+python scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_gate \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --batch_size 2 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noretr_by_dataset.json
 ```
 ### R3 ablation: no retrieval + no prefix + no gate
 ```bash
