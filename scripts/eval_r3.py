@@ -78,6 +78,23 @@ def _reduce_metrics(
         }
     return reduced
 
+
+def _log_results(tag: str, results: Dict[float, Dict[str, float]]) -> None:
+    logger = logging.getLogger(__name__)
+    for level in sorted(results.keys()):
+        metrics = results[level]
+        logger.info(
+            "Eval summary %s | corruption=%.2f | EM %.4f F1 %.4f BLEU %.4f ROUGE-L %.4f ANLS %.4f RA %.4f",
+            tag,
+            level,
+            metrics.get("exact_match", 0.0),
+            metrics.get("f1", 0.0),
+            metrics.get("bleu", 0.0),
+            metrics.get("rouge_l", 0.0),
+            metrics.get("anls", 0.0),
+            metrics.get("relaxed_acc", 0.0),
+        )
+
 class _ListQADataset(Dataset):
     def __init__(self, samples: List[UnifiedQADatum]) -> None:
         self.samples = samples
@@ -391,6 +408,7 @@ def main() -> None:
             if distributed:
                 results = _reduce_metrics(results, device=cfg.model.device)
             if is_main_process:
+                _log_results(f"dataset={prefix}", results)
                 results_by_dataset[prefix] = results
         if is_main_process:
             save_results(results_by_dataset, args.out_json)
@@ -418,6 +436,7 @@ def main() -> None:
     if distributed:
         results = _reduce_metrics(results, device=cfg.model.device)
     if is_main_process:
+        _log_results("all", results)
         save_results(results, args.out_json)
         print(json.dumps(results, indent=2))
     if distributed:
