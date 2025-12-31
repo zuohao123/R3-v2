@@ -146,10 +146,10 @@ def main() -> None:
     logging.info("Using seed %d", seed)
 
     for level in levels:
-        level = max(0.0, min(1.0, float(level)))
+        level = max(0.0, float(level))
         effective = level * cfg.corruption.max_severity
         corrupted_images, corrupted_texts, c_vis, c_text = simulator(
-            [image], [text], effective, force=args.force
+            [image], [text], level, force=args.force
         )
         tag = f"{level:.2f}".replace(".", "_")
         out_image = os.path.join(args.out_dir, f"corrupt_{tag}.png")

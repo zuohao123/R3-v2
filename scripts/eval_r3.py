@@ -194,6 +194,12 @@ def main() -> None:
         default="pseudo_text",
     )
     parser.add_argument(
+        "--corruption_max_severity",
+        type=float,
+        default=None,
+        help="Scale corruption intensity (effective_level = level * max_severity).",
+    )
+    parser.add_argument(
         "--model_name",
         default=None,
         help="Override model path or HF id for evaluation",
@@ -264,6 +270,8 @@ def main() -> None:
     cfg.r3.enable_context = not args.disable_context
     if args.max_context_chars is not None:
         cfg.r3.max_context_chars = args.max_context_chars
+    if args.corruption_max_severity is not None:
+        cfg.r3.corruption.max_severity = args.corruption_max_severity
     if args.use_soft_prefix:
         cfg.r3.use_soft_prefix = True
     if args.disable_soft_prefix:

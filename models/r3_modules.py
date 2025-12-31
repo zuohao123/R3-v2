@@ -138,6 +138,7 @@ class CorruptionSimulator(nn.Module):
         force: bool = False,
     ) -> Tuple[List[Image.Image], List[str], torch.Tensor, torch.Tensor]:
         cfg = self.config.corruption
+        level = max(0.0, float(level)) * cfg.max_severity
         corrupted_images: List[Image.Image] = []
         corrupted_texts: List[str] = []
         vis_conf: List[float] = []

@@ -50,7 +50,7 @@ class RetrievalConfig:
 @dataclass
 class CorruptionConfig:
     """Corruption probabilities and severity."""
-    max_severity: float = 0.8
+    max_severity: float = 1.6
     blur_prob: float = 0.3
     motion_blur_prob: float = 0.15
     occlusion_prob: float = 0.3

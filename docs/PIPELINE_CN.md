@@ -764,6 +764,15 @@ nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
 ```
 
 ### 7.5 R3 消融评测
+消融说明（各 flag 的含义）：
+- `--disable_text_retrieval` / `--disable_image_retrieval`：移除文本/图像检索通道
+- `--disable_prefix`：移除文本前缀 tokens（PrefixEnhancer）
+- `--disable_visual_memory`：移除图像前缀 tokens
+- `--disable_latent_tokens`：移除可学习的填补 tokens
+- `--disable_memory`：移除 MemoryAligner（mem_t / mem_i 归零）
+- `--disable_gate`：移除自适应门控（权重固定为均匀）
+- `--disable_context`：不拼接检索到的上下文
+- `--disable_soft_prefix`：不把 prefix tokens 注入 Qwen 输入
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -777,7 +786,9 @@ python scripts/eval_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --top_k 3
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32
 ```
 
 ```bash
@@ -791,7 +802,85 @@ python scripts/eval_r3.py \
   --val_jsonl data/unified/val.jsonl \
   --image_root data/raw \
   --index_dir indices \
-  --top_k 3
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32
+
+### 7.5.1 消融评测（后台 nohup）
+```bash
+mkdir -p logs
+
+# 消融：无检索 + 无门控（按数据集）
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_gate \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noretr_by_dataset.json \
+  > logs/eval_r3_ablation_noretr_by_dataset.log 2>&1 &
+
+# 消融：无前缀 tokens（禁用 text/image prefix + latent + soft prefix）
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_prefix \
+  --disable_visual_memory \
+  --disable_latent_tokens \
+  --disable_soft_prefix \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noprefix_by_dataset.json \
+  > logs/eval_r3_ablation_noprefix_by_dataset.log 2>&1 &
+
+# 消融：无 MemoryAligner（mem_t/mem_i 归零）
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_memory \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_nomemory_by_dataset.json \
+  > logs/eval_r3_ablation_nomemory_by_dataset.log 2>&1 &
+```
 ```
 
 ---

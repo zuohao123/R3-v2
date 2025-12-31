@@ -815,6 +815,16 @@ python scripts/eval_r3.py \
 ```
 
 ### R3 ablation (per-dataset)
+Definitions (what each flag removes):
+- `--disable_text_retrieval` / `--disable_image_retrieval`: remove text/image retrieval channels.
+- `--disable_prefix`: remove text prefix enhancer (prefix tokens from text).
+- `--disable_visual_memory`: remove image prefix tokens.
+- `--disable_latent_tokens`: remove learnable imputation tokens.
+- `--disable_memory`: remove memory aligner (mem_t/mem_i and retrieval alignment loss).
+- `--disable_gate`: remove adaptive gate (defaults to uniform weights).
+- `--disable_context`: do not append retrieved context to pseudo-text.
+- `--disable_soft_prefix`: do not inject prefix tokens into Qwen input.
+
 ```bash
 python scripts/eval_r3.py \
   --eval_mode r3 \
@@ -973,6 +983,82 @@ nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
   --sample_max 5 \
   --out_json results/r3_corrupt_by_dataset.json \
   > logs/eval_r3_corrupt_by_dataset.log 2>&1 &
+```
+
+### Background ablation runs (nohup)
+```bash
+mkdir -p logs
+
+# Ablation: no retrieval + no gate (per-dataset)
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_text_retrieval \
+  --disable_image_retrieval \
+  --disable_gate \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noretr_by_dataset.json \
+  > logs/eval_r3_ablation_noretr_by_dataset.log 2>&1 &
+
+# Ablation: no prefix tokens (disable text/image prefix + latent + soft prefix)
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_prefix \
+  --disable_visual_memory \
+  --disable_latent_tokens \
+  --disable_soft_prefix \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_noprefix_by_dataset.json \
+  > logs/eval_r3_ablation_noprefix_by_dataset.log 2>&1 &
+
+# Ablation: no memory alignment (mem_t/mem_i zeros)
+nohup torchrun --nproc_per_node=8 scripts/eval_r3.py \
+  --eval_mode r3 \
+  --clean_only \
+  --disable_memory \
+  --dataset_prefixes screenqa,chartqa,infovqa \
+  --checkpoint_dir checkpoints/step_1000 \
+  --model_name models/Qwen3-VL-8B-Instruct \
+  --val_jsonl data/unified/val.jsonl \
+  --image_root data/raw \
+  --index_dir indices \
+  --top_k 3 \
+  --answer_only \
+  --max_new_tokens 32 \
+  --batch_size 2 \
+  --max_eval_samples 1000 \
+  --eval_log_every 50 \
+  --sample_every 200 \
+  --sample_max 5 \
+  --out_json results/r3_ablation_nomemory_by_dataset.json \
+  > logs/eval_r3_ablation_nomemory_by_dataset.log 2>&1 &
 ```
 ### R3 ablation: no retrieval + no prefix + no gate
 ```bash

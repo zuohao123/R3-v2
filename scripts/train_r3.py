@@ -95,6 +95,12 @@ def main() -> None:
     parser.add_argument("--max_corruption", type=float, default=None)
     parser.add_argument("--corruption_warmup_steps", type=int, default=None)
     parser.add_argument("--corruption_total_steps", type=int, default=None)
+    parser.add_argument(
+        "--corruption_max_severity",
+        type=float,
+        default=None,
+        help="Scale corruption intensity (effective_level = level * max_severity).",
+    )
     parser.add_argument("--disable_text_retrieval", action="store_true")
     parser.add_argument("--disable_image_retrieval", action="store_true")
     parser.add_argument("--disable_prefix", action="store_true")
@@ -223,6 +229,8 @@ def main() -> None:
     if args.teacher_ema_start_step is not None:
         cfg.training.teacher_ema_start_step = args.teacher_ema_start_step
     cfg.r3.enable_corruption = not args.disable_corruption
+    if args.corruption_max_severity is not None:
+        cfg.r3.corruption.max_severity = args.corruption_max_severity
     if args.max_corruption is not None:
         cfg.curriculum.max_corruption = args.max_corruption
     if args.corruption_warmup_steps is not None:
