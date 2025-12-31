@@ -114,6 +114,7 @@ def _collapse_number_words(tokens: List[str]) -> List[str]:
             out.append(tok)
             i += 1
             continue
+        start = i
         total = 0
         current = 0
         consumed = False
@@ -144,8 +145,9 @@ def _collapse_number_words(tokens: List[str]) -> List[str]:
             total += current
             out.append(str(total))
         else:
-            out.append(tokens[i])
-            i += 1
+            # Standalone "and" without any number words should be kept as-is.
+            out.append(tokens[start])
+            i = start + 1
     return out
 
 
