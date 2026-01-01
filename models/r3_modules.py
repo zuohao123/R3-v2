@@ -138,7 +138,9 @@ class CorruptionSimulator(nn.Module):
         force: bool = False,
     ) -> Tuple[List[Image.Image], List[str], torch.Tensor, torch.Tensor]:
         cfg = self.config.corruption
-        level = max(0.0, float(level)) * cfg.max_severity
+        base_level = max(0.0, float(level))
+        severity = min(1.0, base_level)
+        level = base_level * cfg.max_severity
         corrupted_images: List[Image.Image] = []
         corrupted_texts: List[str] = []
         vis_conf: List[float] = []
@@ -149,35 +151,48 @@ class CorruptionSimulator(nn.Module):
             txt_severity = 0.0
             applied_vis = False
             applied_txt = False
-            if random.random() < cfg.blur_prob * level:
+            light_scale = 0.5 * (severity**0.7)
+            medium_scale = 0.7 * severity
+            heavy_scale = 1.2 * (severity**2.0)
+
+            blur_p = min(1.0, cfg.blur_prob * light_scale)
+            motion_p = min(1.0, cfg.motion_blur_prob * light_scale)
+            noise_p = min(1.0, cfg.noise_prob * light_scale)
+            color_p = min(1.0, cfg.color_prob * light_scale)
+            downsample_p = min(1.0, cfg.downsample_prob * medium_scale)
+            jpeg_p = min(1.0, cfg.jpeg_prob * medium_scale)
+            occlusion_p = min(1.0, cfg.occlusion_prob * heavy_scale)
+            crop_p = min(1.0, cfg.crop_prob * heavy_scale)
+
+            if random.random() < blur_p:
                 image = self._blur(image, level)
                 vis_severity += 0.2
                 applied_vis = True
-            if random.random() < cfg.motion_blur_prob * level:
+            if random.random() < motion_p:
                 image = self._motion_blur(image, level)
                 vis_severity += 0.2
                 applied_vis = True
-            if random.random() < cfg.occlusion_prob * level:
+            if random.random() < occlusion_p:
                 image = self._occlude(image, level)
                 vis_severity += 0.4
                 applied_vis = True
-            if random.random() < cfg.crop_prob * level:
+            if random.random() < crop_p:
                 image = self._crop(image, level)
                 vis_severity += 0.3
                 applied_vis = True
-            if random.random() < cfg.downsample_prob * level:
+            if random.random() < downsample_p:
                 image = self._downsample(image, level)
                 vis_severity += 0.15
                 applied_vis = True
-            if random.random() < cfg.jpeg_prob * level:
+            if random.random() < jpeg_p:
                 image = self._jpeg_compress(image, level)
                 vis_severity += 0.15
                 applied_vis = True
-            if random.random() < cfg.noise_prob * level:
+            if random.random() < noise_p:
                 image = self._add_noise(image, level)
                 vis_severity += 0.2
                 applied_vis = True
-            if random.random() < cfg.color_prob * level:
+            if random.random() < color_p:
                 image = self._color_jitter(image, level)
                 vis_severity += 0.1
                 applied_vis = True
@@ -193,14 +208,14 @@ class CorruptionSimulator(nn.Module):
 
             if force and level > 0.0:
                 if not applied_vis and (
-                    cfg.blur_prob
-                    + cfg.motion_blur_prob
-                    + cfg.occlusion_prob
-                    + cfg.crop_prob
-                    + cfg.downsample_prob
-                    + cfg.jpeg_prob
-                    + cfg.noise_prob
-                    + cfg.color_prob
+                    blur_p
+                    + motion_p
+                    + occlusion_p
+                    + crop_p
+                    + downsample_p
+                    + jpeg_p
+                    + noise_p
+                    + color_p
                 ) > 0:
                     choices = [
                         "blur",
@@ -213,14 +228,14 @@ class CorruptionSimulator(nn.Module):
                         "color",
                     ]
                     weights = [
-                        cfg.blur_prob,
-                        cfg.motion_blur_prob,
-                        cfg.occlusion_prob,
-                        cfg.crop_prob,
-                        cfg.downsample_prob,
-                        cfg.jpeg_prob,
-                        cfg.noise_prob,
-                        cfg.color_prob,
+                        blur_p,
+                        motion_p,
+                        occlusion_p,
+                        crop_p,
+                        downsample_p,
+                        jpeg_p,
+                        noise_p,
+                        color_p,
                     ]
                     op = random.choices(choices, weights=weights, k=1)[0]
                     if op == "blur":

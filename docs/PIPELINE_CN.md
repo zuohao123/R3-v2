@@ -427,16 +427,17 @@ nohup torchrun --nproc_per_node=8 scripts/train_r3.py \
   --output_dir checkpoints/stage5_full \
   --resume_from checkpoints/stage4_joint/step_2000 \
   --fp16 --use_lora \
-  --batch_size 2 --grad_accum 4 \
+  --batch_size 1 --grad_accum 8 \
   --learning_rate 1e-6 \
   --max_length 2048 --max_context_chars 128 \
-  --max_steps 10001 --save_every 2000 --eval_every 100000 \
+  --max_steps 20001 --save_every 4000 --eval_every 100000 \
   --sample_every 0 --num_workers 0 \
   --gate_conf_weight 0.1 --gate_entropy_weight 0.01 \
   --retrieval_align_weight 0.05 --retrieval_align_temperature 0.07 \
   --max_corruption 1 \
-  --corruption_warmup_steps 5000 \
-  --corruption_total_steps 10000 \
+  --num_epochs 3 \
+  --corruption_warmup_steps 10000 \
+  --corruption_total_steps 20000 \
   --teacher_mode ema \
   --teacher_ema_decay 0.999 \
   --teacher_ema_update_steps 1 \
