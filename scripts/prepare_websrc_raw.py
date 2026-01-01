@@ -68,12 +68,12 @@ def _load_image(payload: Any) -> Optional[Image.Image]:
     return None
 
 
-def _pick_split(dataset_name: str, split: Optional[str]) -> str:
+def _pick_split(dataset_name: str, config_name: Optional[str], split: Optional[str]) -> str:
     from datasets import get_dataset_split_names
 
     if split:
         return split
-    splits = get_dataset_split_names(dataset_name)
+    splits = get_dataset_split_names(dataset_name, config_name) if config_name else get_dataset_split_names(dataset_name)
     for cand in ("validation", "test", "train"):
         if cand in splits:
             return cand
@@ -83,11 +83,19 @@ def _pick_split(dataset_name: str, split: Optional[str]) -> str:
 
 
 def _iter_dataset(
-    dataset_name: str, split: str, streaming: bool, shuffle: bool, seed: int
+    dataset_name: str,
+    config_name: Optional[str],
+    split: str,
+    streaming: bool,
+    shuffle: bool,
+    seed: int,
 ) -> Iterable[Dict[str, Any]]:
     from datasets import load_dataset
 
-    ds = load_dataset(dataset_name, split=split, streaming=streaming)
+    if config_name:
+        ds = load_dataset(dataset_name, config_name, split=split, streaming=streaming)
+    else:
+        ds = load_dataset(dataset_name, split=split, streaming=streaming)
     if not streaming and shuffle:
         ds = ds.shuffle(seed=seed)
     return ds
@@ -103,6 +111,7 @@ def _write_jsonl(path: str, records: Iterable[Dict[str, Any]]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare WebSRC raw JSONL and images.")
     parser.add_argument("--dataset", default="websrc")
+    parser.add_argument("--config", default=None, help="Optional HF config name.")
     parser.add_argument("--split", default=None)
     parser.add_argument("--max_samples", type=int, default=5000)
     parser.add_argument("--out_dir", default="data/raw/websrc")
@@ -116,7 +125,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    split = _pick_split(args.dataset, args.split)
+    split = _pick_split(args.dataset, args.config, args.split)
     images_dir = os.path.join(args.out_dir, args.image_subdir)
     os.makedirs(images_dir, exist_ok=True)
 
@@ -126,7 +135,7 @@ def main() -> None:
     records: List[Dict[str, Any]] = []
 
     for sample in _iter_dataset(
-        args.dataset, split, args.streaming, args.shuffle, args.seed
+        args.dataset, args.config, split, args.streaming, args.shuffle, args.seed
     ):
         total += 1
         question = _ensure_text(sample.get("question"), "")
