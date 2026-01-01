@@ -38,7 +38,7 @@ def _load_image(path: str) -> Image.Image:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preview R3 corruption effects.")
     parser.add_argument("--image", default='data/image.jpg', help="Path to an image file.")
-    parser.add_argument("--text", default='Exercise 10 of 12” at the top. In the center, there is an illustration of a person performing a lunge, with one leg stepping forward and the back leg extended behind. The individual is standing upright with hands on the hips. Below the illustration, the exercise name “LUNGES” is written in bold orange text. At the bottom, a circular timer labeled “30” indicates the duration of the exercise. Navigation arrows appear on the left and right sides of the screen.', help="Input text to corrupt.")
+    parser.add_argument("--text", default='“Exercise 10 of 12” screen with a lunge illustration, exercise label (“LUNGES”), and 30-second timer.', help="Input text to corrupt.")
     parser.add_argument(
         "--levels",
         default="0,0.2,0.4,0.6,0.8",
