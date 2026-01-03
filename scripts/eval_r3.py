@@ -314,14 +314,29 @@ def main() -> None:
     if args.eval_mode == "r3":
         text_retriever = None
         image_retriever = None
-        if cfg.r3.enable_text_retrieval:
+        text_index_ready = os.path.exists(cfg.retrieval.text_index_path) and os.path.exists(
+            cfg.retrieval.text_meta_path
+        )
+        image_index_ready = os.path.exists(cfg.retrieval.image_index_path) and os.path.exists(
+            cfg.retrieval.image_meta_path
+        )
+        if text_index_ready:
             text_retriever = TextRetriever(cfg.retrieval.text_encoder_name)
             text_retriever.load(
                 cfg.retrieval.text_index_path,
                 cfg.retrieval.text_meta_path,
                 cfg.retrieval.text_embeds_path,
             )
-        if cfg.r3.enable_image_retrieval:
+            if not cfg.r3.enable_text_retrieval and is_main_process:
+                logging.info(
+                    "Text retrieval disabled; loaded text index to match R3 dimensions."
+                )
+        elif cfg.r3.enable_text_retrieval:
+            raise FileNotFoundError(
+                f"Missing text index files under {cfg.retrieval.index_dir}"
+            )
+
+        if image_index_ready:
             image_retriever = ImageRetriever(
                 cfg.retrieval.image_encoder_name, device=cfg.model.device
             )
@@ -329,6 +344,14 @@ def main() -> None:
                 cfg.retrieval.image_index_path,
                 cfg.retrieval.image_meta_path,
                 cfg.retrieval.image_embeds_path,
+            )
+            if not cfg.r3.enable_image_retrieval and is_main_process:
+                logging.info(
+                    "Image retrieval disabled; loaded image index to match R3 dimensions."
+                )
+        elif cfg.r3.enable_image_retrieval:
+            raise FileNotFoundError(
+                f"Missing image index files under {cfg.retrieval.index_dir}"
             )
 
         r3 = R3(qwen, text_retriever, image_retriever, cfg.r3)
