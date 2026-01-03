@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
 
@@ -26,7 +26,7 @@ def _ensure_text(value: Any, fallback: str) -> str:
 
 
 def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
-    for key in (
+    keys = (
         "answer",
         "answers",
         "label",
@@ -35,9 +35,13 @@ def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
         "full_answer",
         "ground_truth",
         "text",
-    ):
+    )
+    for key in keys:
         if key in raw and raw[key] not in (None, ""):
             return _ensure_text(raw[key], fallback)
+    for key, value in raw.items():
+        if "answer" in str(key).lower() and value not in (None, ""):
+            return _ensure_text(value, fallback)
     return fallback
 
 
@@ -48,6 +52,14 @@ def _get_first(sample: Dict[str, Any], keys: List[str]) -> Optional[Any]:
     return None
 
 
+def _find_by_terms(sample: Dict[str, Any], terms: Tuple[str, ...]) -> Optional[Any]:
+    for key, value in sample.items():
+        key_l = str(key).lower()
+        if any(term in key_l for term in terms) and value not in (None, ""):
+            return value
+    return None
+
+
 def _safe_name(text: str) -> str:
     if not text:
         return "unknown"
@@ -55,9 +67,16 @@ def _safe_name(text: str) -> str:
     return text.strip("_") or "unknown"
 
 
-def _load_image(payload: Any) -> Optional[Image.Image]:
+def _load_image(
+    payload: Any,
+    dataset_name: Optional[str] = None,
+    download_images: bool = False,
+    repo_prefix: str = "",
+) -> Optional[Image.Image]:
     if isinstance(payload, Image.Image):
         return payload.convert("RGB")
+    if isinstance(payload, list) and payload:
+        payload = payload[0]
     if isinstance(payload, dict):
         data = payload.get("bytes")
         if data:
@@ -72,6 +91,28 @@ def _load_image(payload: Any) -> Optional[Image.Image]:
         except Exception:
             if os.path.exists(payload):
                 return Image.open(payload).convert("RGB")
+            if download_images and dataset_name:
+                if payload.startswith("http"):
+                    try:
+                        import requests
+
+                        resp = requests.get(payload, timeout=30)
+                        resp.raise_for_status()
+                        return Image.open(io.BytesIO(resp.content)).convert("RGB")
+                    except Exception:
+                        return None
+                try:
+                    from huggingface_hub import hf_hub_download
+
+                    remote_path = os.path.join(repo_prefix, payload).replace("\\", "/")
+                    local_path = hf_hub_download(
+                        repo_id=dataset_name,
+                        repo_type="dataset",
+                        filename=remote_path,
+                    )
+                    return Image.open(local_path).convert("RGB")
+                except Exception:
+                    return None
     return None
 
 
@@ -128,10 +169,18 @@ def main() -> None:
     parser.add_argument("--out_dir", default="data/raw/ocrvqa")
     parser.add_argument("--image_root", default="data/raw")
     parser.add_argument("--image_subdir", default="images")
+    parser.add_argument("--image_key", default=None, help="Explicit image field name.")
+    parser.add_argument("--download_images", action="store_true")
+    parser.add_argument(
+        "--image_repo_prefix",
+        default="",
+        help="Prefix path inside HF dataset repo for image files.",
+    )
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--streaming", action="store_true")
     parser.add_argument("--out_jsonl", default=None)
+    parser.add_argument("--debug_keys", action="store_true")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -143,24 +192,58 @@ def main() -> None:
     out_jsonl = args.out_jsonl or os.path.join(args.out_dir, f"ocrvqa_raw_{split}.jsonl")
     kept = 0
     total = 0
+    skipped_no_question = 0
+    skipped_no_answer = 0
+    skipped_no_image = 0
     records: List[Dict[str, Any]] = []
+    first_keys_logged = False
 
     for sample in _iter_dataset(
         args.dataset, args.config, split, args.streaming, args.shuffle, args.seed
     ):
         total += 1
-        question = _ensure_text(
-            _get_first(sample, ["question", "query", "text", "caption", "prompt"]),
-            "",
-        )
+        question_value = _get_first(sample, ["question", "query", "text", "caption", "prompt"])
+        if question_value is None:
+            question_value = _find_by_terms(sample, ("question", "query", "prompt"))
+        question = _ensure_text(question_value, "")
         answer = _extract_answer(sample, "")
         if not question or not answer:
+            if not question:
+                skipped_no_question += 1
+            if not answer:
+                skipped_no_answer += 1
             continue
-        image_value = _get_first(
-            sample, ["image", "img", "image_path", "image_file", "image_filename"]
+        image_value = None
+        if args.image_key:
+            image_value = sample.get(args.image_key)
+        if image_value is None:
+            image_value = _get_first(
+                sample,
+                ["image", "img", "image_path", "image_file", "image_filename", "file_name", "filename"],
+            )
+        if image_value is None:
+            image_value = _find_by_terms(sample, ("image", "img"))
+        image = _load_image(
+            image_value,
+            dataset_name=args.dataset,
+            download_images=args.download_images,
+            repo_prefix=args.image_repo_prefix,
         )
-        image = _load_image(image_value)
         if image is None:
+            skipped_no_image += 1
+            if args.debug_keys and not first_keys_logged:
+                logging.info("Sample keys: %s", sorted(list(sample.keys())))
+                for key in sorted(sample.keys()):
+                    key_l = str(key).lower()
+                    if "image" in key_l or "img" in key_l or "question" in key_l or "answer" in key_l:
+                        value = sample.get(key)
+                        logging.info(
+                            "Sample[%s]: type=%s value=%s",
+                            key,
+                            type(value).__name__,
+                            str(value)[:200],
+                        )
+                first_keys_logged = True
             continue
         image_id = _ensure_text(
             _get_first(
@@ -187,7 +270,15 @@ def main() -> None:
             logging.info("Collected %d samples (seen %d).", kept, total)
 
     _write_jsonl(out_jsonl, records)
-    logging.info("Saved %d samples to %s (split=%s).", kept, out_jsonl, split)
+    logging.info(
+        "Saved %d samples to %s (split=%s). Skipped: no_question=%d no_answer=%d no_image=%d",
+        kept,
+        out_jsonl,
+        split,
+        skipped_no_question,
+        skipped_no_answer,
+        skipped_no_image,
+    )
 
 
 if __name__ == "__main__":
