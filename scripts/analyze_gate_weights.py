@@ -204,10 +204,12 @@ def _compute_gates_only(
 def _reduce_stats(stats: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if not dist.is_initialized():
         return stats
-    keys = sorted(stats.keys())
-    tensor = torch.stack([stats[k] for k in keys])
-    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
-    return {k: tensor[i] for i, k in enumerate(keys)}
+    reduced: Dict[str, torch.Tensor] = {}
+    for key, value in stats.items():
+        tensor = value.clone()
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+        reduced[key] = tensor
+    return reduced
 
 
 def _finalize_stats(stats: Dict[str, torch.Tensor]) -> Dict[str, Any]:
