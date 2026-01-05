@@ -199,6 +199,20 @@ def main() -> None:
         default=None,
         help="Scale corruption intensity (effective_level = level * max_severity).",
     )
+    parser.add_argument("--blur_prob", type=float, default=None)
+    parser.add_argument("--motion_blur_prob", type=float, default=None)
+    parser.add_argument("--occlusion_prob", type=float, default=None)
+    parser.add_argument("--crop_prob", type=float, default=None)
+    parser.add_argument("--downsample_prob", type=float, default=None)
+    parser.add_argument("--jpeg_prob", type=float, default=None)
+    parser.add_argument("--noise_prob", type=float, default=None)
+    parser.add_argument("--color_prob", type=float, default=None)
+    parser.add_argument("--text_trunc_prob", type=float, default=None)
+    parser.add_argument("--text_noise_prob", type=float, default=None)
+    parser.add_argument("--noise_std", type=float, default=None)
+    parser.add_argument("--jpeg_quality_min", type=int, default=None)
+    parser.add_argument("--jpeg_quality_max", type=int, default=None)
+    parser.add_argument("--color_jitter", type=float, default=None)
     parser.add_argument(
         "--model_name",
         default=None,
@@ -272,6 +286,34 @@ def main() -> None:
         cfg.r3.max_context_chars = args.max_context_chars
     if args.corruption_max_severity is not None:
         cfg.r3.corruption.max_severity = args.corruption_max_severity
+    if args.blur_prob is not None:
+        cfg.r3.corruption.blur_prob = args.blur_prob
+    if args.motion_blur_prob is not None:
+        cfg.r3.corruption.motion_blur_prob = args.motion_blur_prob
+    if args.occlusion_prob is not None:
+        cfg.r3.corruption.occlusion_prob = args.occlusion_prob
+    if args.crop_prob is not None:
+        cfg.r3.corruption.crop_prob = args.crop_prob
+    if args.downsample_prob is not None:
+        cfg.r3.corruption.downsample_prob = args.downsample_prob
+    if args.jpeg_prob is not None:
+        cfg.r3.corruption.jpeg_prob = args.jpeg_prob
+    if args.noise_prob is not None:
+        cfg.r3.corruption.noise_prob = args.noise_prob
+    if args.color_prob is not None:
+        cfg.r3.corruption.color_prob = args.color_prob
+    if args.text_trunc_prob is not None:
+        cfg.r3.corruption.text_trunc_prob = args.text_trunc_prob
+    if args.text_noise_prob is not None:
+        cfg.r3.corruption.text_noise_prob = args.text_noise_prob
+    if args.noise_std is not None:
+        cfg.r3.corruption.noise_std = args.noise_std
+    if args.jpeg_quality_min is not None:
+        cfg.r3.corruption.jpeg_quality_min = args.jpeg_quality_min
+    if args.jpeg_quality_max is not None:
+        cfg.r3.corruption.jpeg_quality_max = args.jpeg_quality_max
+    if args.color_jitter is not None:
+        cfg.r3.corruption.color_jitter = args.color_jitter
     if args.use_soft_prefix:
         cfg.r3.use_soft_prefix = True
     if args.disable_soft_prefix:
