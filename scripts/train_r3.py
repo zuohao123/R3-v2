@@ -116,6 +116,8 @@ def main() -> None:
     parser.add_argument("--score_temperature", type=float, default=None)
     parser.add_argument("--min_text_score", type=float, default=None)
     parser.add_argument("--min_image_score", type=float, default=None)
+    parser.add_argument("--max_text_score", type=float, default=None)
+    parser.add_argument("--max_image_score", type=float, default=None)
     parser.add_argument("--disable_score_weighting", action="store_true")
     parser.add_argument("--r3_fp32", action="store_true", help="Run R3 modules in fp32")
     parser.add_argument("--r3_fp16", action="store_true", help="Allow autocast in R3 modules")
@@ -259,6 +261,10 @@ def main() -> None:
         cfg.r3.min_text_score = args.min_text_score
     if args.min_image_score is not None:
         cfg.r3.min_image_score = args.min_image_score
+    if args.max_text_score is not None:
+        cfg.r3.max_text_score = args.max_text_score
+    if args.max_image_score is not None:
+        cfg.r3.max_image_score = args.max_image_score
     if args.disable_score_weighting:
         cfg.r3.use_score_weighting = False
     if args.r3_fp16:

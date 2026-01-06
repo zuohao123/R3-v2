@@ -150,13 +150,23 @@ def _compute_gates_only(
     image_embeds = F.normalize(image_embeds, dim=-1, eps=1e-6).detach()
 
     if text_scores is not None:
-        text_weights = r3._score_weights(text_scores, top_k, r3.config.min_text_score)
+        text_weights = r3._score_weights(
+            text_scores,
+            top_k,
+            r3.config.min_text_score,
+            r3.config.max_text_score,
+        )
     else:
         text_weights = torch.full(
             (len(images), top_k), 1.0 / top_k, device=r3.qwen.device
         )
     if image_scores is not None:
-        image_weights = r3._score_weights(image_scores, top_k, r3.config.min_image_score)
+        image_weights = r3._score_weights(
+            image_scores,
+            top_k,
+            r3.config.min_image_score,
+            r3.config.max_image_score,
+        )
     else:
         image_weights = torch.full(
             (len(images), top_k), 1.0 / top_k, device=r3.qwen.device

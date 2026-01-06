@@ -90,6 +90,8 @@ class R3Config:
     score_temperature: float = 1.0
     min_text_score: float = -1.0
     min_image_score: float = -1.0
+    max_text_score: float = -1.0
+    max_image_score: float = -1.0
     corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
 
 

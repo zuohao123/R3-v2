@@ -525,6 +525,10 @@ class R3(nn.Module):
                     text
                     for text, score in zip(texts, scores)
                     if score >= self.config.min_text_score
+                    and (
+                        self.config.max_text_score < 0
+                        or score <= self.config.max_text_score
+                    )
                 ]
             if image_scores is not None:
                 scores = image_scores[idx].tolist()
@@ -532,6 +536,10 @@ class R3(nn.Module):
                     text
                     for text, score in zip(imgs, scores)
                     if score >= self.config.min_image_score
+                    and (
+                        self.config.max_image_score < 0
+                        or score <= self.config.max_image_score
+                    )
                 ]
             n_text = max(1, int(round(g_t * top_k))) if texts else 0
             n_img = max(0, int(round(g_i * top_k))) if imgs else 0
@@ -545,30 +553,36 @@ class R3(nn.Module):
         return contexts
 
     def _score_weights(
-        self, scores: Optional[np.ndarray], top_k: int, min_score: float
+        self,
+        scores: Optional[np.ndarray],
+        top_k: int,
+        min_score: float,
+        max_score: float,
     ) -> torch.Tensor:
         if scores is None:
             return torch.full((top_k,), 1.0 / top_k, device=self.qwen.device)
         weights = torch.tensor(scores, device=self.qwen.device, dtype=torch.float32)
+        mask = torch.isfinite(weights)
         if min_score > -1.0:
-            weights = weights.masked_fill(weights < min_score, float("-inf"))
+            mask = mask & (weights >= min_score)
+        if max_score > -1.0:
+            mask = mask & (weights <= max_score)
+        weights = torch.where(
+            mask, weights, torch.tensor(float("-inf"), device=weights.device)
+        )
         if self.config.use_score_weighting:
             temperature = max(self.config.score_temperature, 1e-6)
             weights = torch.softmax(weights / temperature, dim=-1)
         else:
-            mask = torch.isfinite(weights)
             weights = mask.float()
         weights = torch.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
         row_sum = weights.sum(dim=-1, keepdim=True)
-        fallback = row_sum < 1e-6
-        if fallback.any():
-            weights = torch.where(
-                fallback,
-                torch.full_like(weights, 1.0 / weights.size(-1)),
-                weights / row_sum.clamp_min(1e-6),
-            )
-        else:
-            weights = weights / row_sum.clamp_min(1e-6)
+        mask_any = mask.any(dim=-1, keepdim=True)
+        weights = torch.where(
+            mask_any,
+            weights / row_sum.clamp_min(1e-6),
+            torch.zeros_like(weights),
+        )
         return weights
 
     def _apply_retrieval_confidence(
@@ -692,12 +706,22 @@ class R3(nn.Module):
             text_embeds = F.normalize(text_embeds, dim=-1, eps=1e-6).detach()
             image_embeds = F.normalize(image_embeds, dim=-1, eps=1e-6).detach()
             text_weights = (
-                self._score_weights(text_scores, top_k, self.config.min_text_score)
+                self._score_weights(
+                    text_scores,
+                    top_k,
+                    self.config.min_text_score,
+                    self.config.max_text_score,
+                )
                 if text_scores is not None
                 else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
             )
             image_weights = (
-                self._score_weights(image_scores, top_k, self.config.min_image_score)
+                self._score_weights(
+                    image_scores,
+                    top_k,
+                    self.config.min_image_score,
+                    self.config.max_image_score,
+                )
                 if image_scores is not None
                 else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
             )
@@ -841,12 +865,22 @@ class R3(nn.Module):
         text_embeds = F.normalize(text_embeds, dim=-1, eps=1e-6).detach()
         image_embeds = F.normalize(image_embeds, dim=-1, eps=1e-6).detach()
         text_weights = (
-            self._score_weights(text_scores, top_k, self.config.min_text_score)
+            self._score_weights(
+                text_scores,
+                top_k,
+                self.config.min_text_score,
+                self.config.max_text_score,
+            )
             if text_scores is not None
             else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
         )
         image_weights = (
-            self._score_weights(image_scores, top_k, self.config.min_image_score)
+            self._score_weights(
+                image_scores,
+                top_k,
+                self.config.min_image_score,
+                self.config.max_image_score,
+            )
             if image_scores is not None
             else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
         )

@@ -159,6 +159,10 @@ def main() -> None:
     parser.add_argument("--max_eval_samples", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--top_k", type=int, default=3)
+    parser.add_argument("--min_text_score", type=float, default=None)
+    parser.add_argument("--min_image_score", type=float, default=None)
+    parser.add_argument("--max_text_score", type=float, default=None)
+    parser.add_argument("--max_image_score", type=float, default=None)
     parser.add_argument("--max_new_tokens", type=int, default=None)
     parser.add_argument(
         "--dataset",
@@ -282,6 +286,14 @@ def main() -> None:
     cfg.r3.enable_latent_tokens = not args.disable_latent_tokens
     cfg.r3.enable_gate = not args.disable_gate
     cfg.r3.enable_context = not args.disable_context
+    if args.min_text_score is not None:
+        cfg.r3.min_text_score = args.min_text_score
+    if args.min_image_score is not None:
+        cfg.r3.min_image_score = args.min_image_score
+    if args.max_text_score is not None:
+        cfg.r3.max_text_score = args.max_text_score
+    if args.max_image_score is not None:
+        cfg.r3.max_image_score = args.max_image_score
     if args.max_context_chars is not None:
         cfg.r3.max_context_chars = args.max_context_chars
     if args.corruption_max_severity is not None:
