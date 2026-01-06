@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import numpy as np
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -150,16 +151,21 @@ def _audit_text(
     top_k: int,
     query_mode: str,
     batch_size: int,
+    sim_thresholds: List[float],
 ) -> Dict[str, float]:
     hit_k = 0
     hit_1 = 0
     count = 0
+    top1_scores: List[float] = []
+    max_scores: List[float] = []
+    near_dup = {thr: 0 for thr in sim_thresholds}
     for batch in _iter_batches(samples, batch_size):
         queries = [
             _build_query(s.question, s.pseudo_text, query_mode) for s in batch
         ]
         result = retriever.retrieve(queries, top_k)
         metas = result["metadata"]
+        scores = result.get("scores")
         for sample, retrieved in zip(batch, metas):
             answers = _answers_list(sample.answer)
             texts = [
@@ -171,10 +177,28 @@ def _audit_text(
                 hit_1 += 1
             if any(_contains_answer(t, answers) for t in texts):
                 hit_k += 1
+            if scores is not None:
+                row = scores[min(len(top1_scores), len(scores) - 1)]
+                if row.size > 0:
+                    top1 = float(row[0])
+                    mscore = float(row.max())
+                    top1_scores.append(top1)
+                    max_scores.append(mscore)
+                    for thr in sim_thresholds:
+                        if mscore >= thr:
+                            near_dup[thr] += 1
+                else:
+                    top1_scores.append(0.0)
+                    max_scores.append(0.0)
     return {
         "count": count,
         "answer_hit_at_1": hit_1 / max(count, 1),
         "answer_hit_at_k": hit_k / max(count, 1),
+        "top1_sim_mean": float(np.mean(top1_scores)) if top1_scores else 0.0,
+        "top1_sim_p95": float(np.percentile(top1_scores, 95)) if top1_scores else 0.0,
+        "max_sim_mean": float(np.mean(max_scores)) if max_scores else 0.0,
+        "max_sim_p95": float(np.percentile(max_scores, 95)) if max_scores else 0.0,
+        "near_dup_rate": {str(thr): near_dup[thr] / max(count, 1) for thr in sim_thresholds},
     }
 
 
@@ -184,10 +208,14 @@ def _audit_image(
     top_k: int,
     image_root: str,
     batch_size: int,
+    sim_thresholds: List[float],
 ) -> Dict[str, float]:
     hit_k = 0
     hit_1 = 0
     count = 0
+    top1_scores: List[float] = []
+    max_scores: List[float] = []
+    near_dup = {thr: 0 for thr in sim_thresholds}
     for batch in _iter_batches(samples, batch_size):
         images: List[Image.Image] = []
         paths: List[str] = []
@@ -202,6 +230,7 @@ def _audit_image(
             continue
         result = retriever.retrieve(images, top_k)
         metas = result["metadata"]
+        scores = result.get("scores")
         for path, retrieved in zip(paths, metas):
             count += 1
             retrieved_paths = [
@@ -213,10 +242,28 @@ def _audit_image(
                 hit_1 += 1
             if target in retrieved_paths:
                 hit_k += 1
+            if scores is not None:
+                row = scores[min(len(top1_scores), len(scores) - 1)]
+                if row.size > 0:
+                    top1 = float(row[0])
+                    mscore = float(row.max())
+                    top1_scores.append(top1)
+                    max_scores.append(mscore)
+                    for thr in sim_thresholds:
+                        if mscore >= thr:
+                            near_dup[thr] += 1
+                else:
+                    top1_scores.append(0.0)
+                    max_scores.append(0.0)
     return {
         "count": count,
         "self_hit_at_1": hit_1 / max(count, 1),
         "self_hit_at_k": hit_k / max(count, 1),
+        "top1_sim_mean": float(np.mean(top1_scores)) if top1_scores else 0.0,
+        "top1_sim_p95": float(np.percentile(top1_scores, 95)) if top1_scores else 0.0,
+        "max_sim_mean": float(np.mean(max_scores)) if max_scores else 0.0,
+        "max_sim_p95": float(np.percentile(max_scores, 95)) if max_scores else 0.0,
+        "near_dup_rate": {str(thr): near_dup[thr] / max(count, 1) for thr in sim_thresholds},
     }
 
 
@@ -234,6 +281,11 @@ def main() -> None:
     parser.add_argument("--top_k", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--query_mode", choices=["concat", "question", "pseudo_text"], default="concat")
+    parser.add_argument(
+        "--sim_thresholds",
+        default="0.9,0.8",
+        help="Comma-separated similarity thresholds for near-duplicate rate.",
+    )
     parser.add_argument("--skip_text", action="store_true")
     parser.add_argument("--skip_image", action="store_true")
     parser.add_argument("--text_device", default=None)
@@ -285,17 +337,34 @@ def main() -> None:
             cfg.retrieval.image_embeds_path,
         )
 
-    results: Dict[str, Any] = {"meta": {"top_k": args.top_k, "query_mode": args.query_mode}}
+    sim_thresholds = [float(x) for x in args.sim_thresholds.split(",") if x.strip()]
+    results: Dict[str, Any] = {
+        "meta": {
+            "top_k": args.top_k,
+            "query_mode": args.query_mode,
+            "sim_thresholds": sim_thresholds,
+        }
+    }
     for name, samples in datasets.items():
         logging.info("Audit dataset=%s | samples=%d", name, len(samples))
         entry: Dict[str, Any] = {"count": len(samples)}
         if text_retriever is not None:
             entry["text"] = _audit_text(
-                samples, text_retriever, args.top_k, args.query_mode, args.batch_size
+                samples,
+                text_retriever,
+                args.top_k,
+                args.query_mode,
+                args.batch_size,
+                sim_thresholds,
             )
         if image_retriever is not None:
             entry["image"] = _audit_image(
-                samples, image_retriever, args.top_k, args.image_root, args.batch_size
+                samples,
+                image_retriever,
+                args.top_k,
+                args.image_root,
+                args.batch_size,
+                sim_thresholds,
             )
         results[name] = entry
 
