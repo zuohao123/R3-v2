@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -570,6 +571,39 @@ class R3(nn.Module):
             weights = weights / row_sum.clamp_min(1e-6)
         return weights
 
+    def _apply_retrieval_confidence(
+        self,
+        c_vis: torch.Tensor,
+        c_text: torch.Tensor,
+        text_scores: Optional[np.ndarray],
+        image_scores: Optional[np.ndarray],
+    ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+        conf_mode = os.getenv("R3_CONF_MODE", "sim").lower()
+        if conf_mode not in {"retrieval", "hybrid"}:
+            return c_vis, c_text, False
+        conf_alpha = float(os.getenv("R3_CONF_ALPHA", "0.5"))
+
+        def _score_conf(scores: Optional[np.ndarray]) -> Optional[torch.Tensor]:
+            if scores is None:
+                return None
+            tensor = torch.as_tensor(scores, device=self.qwen.device, dtype=torch.float32)
+            conf = (tensor.mean(dim=1, keepdim=True) + 1.0) / 2.0
+            return conf.clamp(0.0, 1.0)
+
+        text_conf = _score_conf(text_scores)
+        image_conf = _score_conf(image_scores)
+        if conf_mode == "retrieval":
+            if text_conf is not None:
+                c_text = text_conf
+            if image_conf is not None:
+                c_vis = image_conf
+        else:
+            if text_conf is not None:
+                c_text = conf_alpha * c_text + (1.0 - conf_alpha) * text_conf
+            if image_conf is not None:
+                c_vis = conf_alpha * c_vis + (1.0 - conf_alpha) * image_conf
+        return c_vis, c_text, True
+
     def _retrieve_texts(
         self, queries: List[str], top_k: int
     ) -> Tuple[torch.Tensor, List[List[str]], Optional[np.ndarray]]:
@@ -649,6 +683,9 @@ class R3(nn.Module):
             image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)
             c_vis = c_vis.to(self.qwen.device, dtype=torch.float32)
             c_text = c_text.to(self.qwen.device, dtype=torch.float32)
+            c_vis, c_text, _ = self._apply_retrieval_confidence(
+                c_vis, c_text, text_scores, image_scores
+            )
 
             text_embeds = self._sanitize(text_embeds)
             image_embeds = self._sanitize(image_embeds)
@@ -784,12 +821,14 @@ class R3(nn.Module):
         answer_only: bool = False,
     ) -> Any:
         if self.config.enable_corruption:
-            corr_images, corr_texts, _, _ = self.corruptor(
+            corr_images, corr_texts, c_vis, c_text = self.corruptor(
                 images, pseudo_texts, corruption_level
             )
         else:
             corr_images = images
             corr_texts = pseudo_texts
+            c_vis = torch.ones(len(images), 1)
+            c_text = torch.ones(len(images), 1)
         queries = [f"{q} {t}" for q, t in zip(questions, corr_texts)]
         text_embeds, retrieved_texts, text_scores = self._retrieve_texts(queries, top_k)
         image_embeds, retrieved_images, retrieved_image_paths, image_scores = self._retrieve_images(
@@ -811,10 +850,18 @@ class R3(nn.Module):
             if image_scores is not None
             else torch.full((len(images), top_k), 1.0 / top_k, device=self.qwen.device)
         )
+        c_vis = c_vis.to(self.qwen.device, dtype=torch.float32)
+        c_text = c_text.to(self.qwen.device, dtype=torch.float32)
+        c_vis, c_text, use_conf = self._apply_retrieval_confidence(
+            c_vis, c_text, text_scores, image_scores
+        )
         if self.memory_aligner is not None:
             mem_t, mem_i = self.memory_aligner(
                 text_embeds, image_embeds, text_weights=text_weights, image_weights=image_weights
             )
+            if use_conf:
+                mem_t = mem_t * c_text
+                mem_i = mem_i * c_vis
             mem_t = self._sanitize(mem_t)
             mem_i = self._sanitize(mem_i)
         else:
@@ -848,8 +895,13 @@ class R3(nn.Module):
             if self.visual_memory is not None:
                 prefix_tokens.append(self.visual_memory(image_embeds, image_weights))
             if self.latent_tokens is not None:
+                latent_conf = (
+                    (c_vis + c_text) / 2.0
+                    if use_conf
+                    else torch.ones(len(images), 1, device=self.qwen.device)
+                )
                 prefix_tokens.append(
-                    self.latent_tokens(len(images), torch.ones(len(images), 1, device=self.qwen.device))
+                    self.latent_tokens(len(images), latent_conf)
                 )
             if prefix_tokens:
                 scaled_tokens: List[torch.Tensor] = []
