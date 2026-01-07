@@ -163,6 +163,8 @@ def main() -> None:
     parser.add_argument("--min_image_score", type=float, default=None)
     parser.add_argument("--max_text_score", type=float, default=None)
     parser.add_argument("--max_image_score", type=float, default=None)
+    parser.add_argument("--shuffle_retrieval", action="store_true")
+    parser.add_argument("--shuffle_seed", type=int, default=0)
     parser.add_argument("--max_new_tokens", type=int, default=None)
     parser.add_argument(
         "--dataset",
@@ -294,6 +296,10 @@ def main() -> None:
         cfg.r3.max_text_score = args.max_text_score
     if args.max_image_score is not None:
         cfg.r3.max_image_score = args.max_image_score
+    if args.shuffle_retrieval:
+        cfg.r3.shuffle_retrieval = True
+    if args.shuffle_seed is not None:
+        cfg.r3.shuffle_seed = args.shuffle_seed
     if args.max_context_chars is not None:
         cfg.r3.max_context_chars = args.max_context_chars
     if args.corruption_max_severity is not None:

@@ -661,6 +661,71 @@ class R3(nn.Module):
         ]
         return torch.from_numpy(embeds).float(), texts, paths, result.get("scores")
 
+    def _maybe_shuffle_retrieval(
+        self,
+        text_embeds: torch.Tensor,
+        retrieved_texts: List[List[str]],
+        text_scores: Optional[np.ndarray],
+        image_embeds: torch.Tensor,
+        retrieved_images: List[List[str]],
+        retrieved_image_paths: List[List[str]],
+        image_scores: Optional[np.ndarray],
+    ) -> Tuple[
+        torch.Tensor,
+        List[List[str]],
+        Optional[np.ndarray],
+        torch.Tensor,
+        List[List[str]],
+        List[List[str]],
+        Optional[np.ndarray],
+    ]:
+        if not self.config.shuffle_retrieval:
+            return (
+                text_embeds,
+                retrieved_texts,
+                text_scores,
+                image_embeds,
+                retrieved_images,
+                retrieved_image_paths,
+                image_scores,
+            )
+        batch_size = len(retrieved_texts)
+        if batch_size <= 1:
+            return (
+                text_embeds,
+                retrieved_texts,
+                text_scores,
+                image_embeds,
+                retrieved_images,
+                retrieved_image_paths,
+                image_scores,
+            )
+        if self.config.shuffle_seed:
+            generator = torch.Generator()
+            generator.manual_seed(self.config.shuffle_seed)
+            perm = torch.randperm(batch_size, generator=generator)
+        else:
+            perm = torch.randperm(batch_size)
+        perm_list = perm.tolist()
+        text_embeds = text_embeds[perm]
+        image_embeds = image_embeds[perm]
+        retrieved_texts = [retrieved_texts[i] for i in perm_list]
+        retrieved_images = [retrieved_images[i] for i in perm_list]
+        retrieved_image_paths = [retrieved_image_paths[i] for i in perm_list]
+        if text_scores is not None:
+            text_scores = text_scores[perm_list]
+        if image_scores is not None:
+            image_scores = image_scores[perm_list]
+        return (
+            text_embeds,
+            retrieved_texts,
+            text_scores,
+            image_embeds,
+            retrieved_images,
+            retrieved_image_paths,
+            image_scores,
+        )
+
     def forward_student(
         self,
         images: List[Image.Image],
@@ -691,6 +756,23 @@ class R3(nn.Module):
             text_embeds, retrieved_texts, text_scores = self._retrieve_texts(queries, top_k)
             image_embeds, retrieved_images, retrieved_image_paths, image_scores = self._retrieve_images(
                 corr_images, top_k
+            )
+            (
+                text_embeds,
+                retrieved_texts,
+                text_scores,
+                image_embeds,
+                retrieved_images,
+                retrieved_image_paths,
+                image_scores,
+            ) = self._maybe_shuffle_retrieval(
+                text_embeds,
+                retrieved_texts,
+                text_scores,
+                image_embeds,
+                retrieved_images,
+                retrieved_image_paths,
+                image_scores,
             )
 
             text_embeds = text_embeds.to(self.qwen.device, dtype=torch.float32)
@@ -857,6 +939,23 @@ class R3(nn.Module):
         text_embeds, retrieved_texts, text_scores = self._retrieve_texts(queries, top_k)
         image_embeds, retrieved_images, retrieved_image_paths, image_scores = self._retrieve_images(
             corr_images, top_k
+        )
+        (
+            text_embeds,
+            retrieved_texts,
+            text_scores,
+            image_embeds,
+            retrieved_images,
+            retrieved_image_paths,
+            image_scores,
+        ) = self._maybe_shuffle_retrieval(
+            text_embeds,
+            retrieved_texts,
+            text_scores,
+            image_embeds,
+            retrieved_images,
+            retrieved_image_paths,
+            image_scores,
         )
         text_embeds = text_embeds.to(self.qwen.device, dtype=torch.float32)
         image_embeds = image_embeds.to(self.qwen.device, dtype=torch.float32)

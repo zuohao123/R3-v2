@@ -92,6 +92,8 @@ class R3Config:
     min_image_score: float = -1.0
     max_text_score: float = -1.0
     max_image_score: float = -1.0
+    shuffle_retrieval: bool = False
+    shuffle_seed: int = 0
     corruption: CorruptionConfig = field(default_factory=CorruptionConfig)
 
 
