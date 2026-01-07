@@ -120,7 +120,7 @@ def _load_ocr_map(ocr_jsonl: str) -> Dict[str, str]:
     return mapping
 
 
-def _numeric_match(pred: str, evidence: str, tol: float) -> bool:
+def _numeric_match(pred: str, evidence: str, num_tol: float) -> bool:
     pred_num = eval_utils._try_parse_float(pred)
     if pred_num is None:
         return False
@@ -131,7 +131,7 @@ def _numeric_match(pred: str, evidence: str, tol: float) -> bool:
         except ValueError:
             continue
         denom = max(abs(pred_num), 1e-6)
-        if abs(ev_num - pred_num) / denom <= tol:
+        if abs(ev_num - pred_num) / denom <= num_tol:
             return True
     return False
 
