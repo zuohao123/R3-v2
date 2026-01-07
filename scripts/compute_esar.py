@@ -445,13 +445,13 @@ def main() -> None:
                         corruptor, images, questions, pseudo_texts, level, args.corrupt_text_target
                     )
                     with torch.no_grad():
-                    preds = qwen.generate_answer(
-                        images,
-                        questions,
-                        pseudo_texts if use_pseudo_text else None,
-                        max_new_tokens=cfg.evaluation.max_new_tokens,
-                        answer_only=args.answer_only,
-                    )
+                        preds = qwen.generate_answer(
+                            images,
+                            questions,
+                            pseudo_texts if use_pseudo_text else None,
+                            max_new_tokens=cfg.evaluation.max_new_tokens,
+                            answer_only=args.answer_only,
+                        )
                     retrieved_texts = [[] for _ in preds]
                     contexts = [""] * len(preds)
                 else:
