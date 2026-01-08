@@ -81,6 +81,7 @@ class R3Config:
     router_in_dim: int = 6
     router_hidden: int = 128
     router_dropout: float = 0.1
+    router_out_dim: int = 2
     enable_corruption: bool = True
     enable_text_retrieval: bool = True
     enable_image_retrieval: bool = True

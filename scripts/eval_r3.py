@@ -239,6 +239,7 @@ def main() -> None:
     parser.add_argument("--disable_router", action="store_true")
     parser.add_argument("--router_hidden", type=int, default=None)
     parser.add_argument("--router_dropout", type=float, default=None)
+    parser.add_argument("--router_out_dim", type=int, default=None)
     parser.add_argument(
         "--load_lora_adapter",
         action="store_true",
@@ -300,6 +301,8 @@ def main() -> None:
         cfg.r3.router_hidden = args.router_hidden
     if args.router_dropout is not None:
         cfg.r3.router_dropout = args.router_dropout
+    if args.router_out_dim is not None:
+        cfg.r3.router_out_dim = args.router_out_dim
     if args.min_text_score is not None:
         cfg.r3.min_text_score = args.min_text_score
     if args.min_image_score is not None:

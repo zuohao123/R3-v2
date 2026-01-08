@@ -429,15 +429,22 @@ class AdaptiveGate(nn.Module):
 
 
 class AdaptiveRouter(nn.Module):
-    """Predict latent imputation strength from observable confidence signals."""
+    """Predict reconstruction strengths from observable confidence signals."""
 
-    def __init__(self, in_dim: int, hidden_dim: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        dropout: float = 0.1,
+        out_dim: int = 1,
+    ) -> None:
         super().__init__()
+        self.out_dim = out_dim
         self.net = nn.Sequential(
             nn.Linear(in_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, out_dim),
         )
 
     def forward(self, feats: torch.Tensor) -> torch.Tensor:
@@ -493,7 +500,12 @@ class R3(nn.Module):
         )
         self.gate = AdaptiveGate(config.hidden_dim) if config.enable_gate else None
         self.router = (
-            AdaptiveRouter(config.router_in_dim, config.router_hidden, config.router_dropout)
+            AdaptiveRouter(
+                config.router_in_dim,
+                config.router_hidden,
+                config.router_dropout,
+                config.router_out_dim,
+            )
             if config.enable_router
             else None
         )
@@ -633,6 +645,36 @@ class R3(nn.Module):
             dim=-1,
         )
         return self._sanitize(feats)
+
+    def _expand_router_override(
+        self,
+        override: Optional[Any],
+        batch_size: int,
+        out_dim: int,
+    ) -> Optional[torch.Tensor]:
+        if override is None:
+            return None
+        if isinstance(override, (int, float)):
+            return torch.full(
+                (batch_size, out_dim),
+                float(override),
+                device=self.qwen.device,
+                dtype=torch.float32,
+            )
+        if isinstance(override, (list, tuple)):
+            values = list(override)
+            if len(values) == 1 and out_dim > 1:
+                values = values * out_dim
+            tensor = torch.tensor(values[:out_dim], device=self.qwen.device, dtype=torch.float32)
+            return tensor.unsqueeze(0).repeat(batch_size, 1)
+        if torch.is_tensor(override):
+            tensor = override.to(self.qwen.device, dtype=torch.float32)
+            if tensor.dim() == 1:
+                tensor = tensor.unsqueeze(0).repeat(batch_size, 1)
+            if tensor.size(1) != out_dim:
+                tensor = tensor[:, :out_dim]
+            return tensor
+        raise ValueError("Unsupported router_alpha_override type.")
 
     def _apply_retrieval_confidence(
         self,
@@ -784,7 +826,7 @@ class R3(nn.Module):
         corruption_level: float,
         top_k: int,
         max_length: Optional[int] = None,
-        router_alpha_override: Optional[float] = None,
+        router_alpha_override: Optional[Any] = None,
     ) -> Dict[str, Any]:
         device_type = self.qwen.device.type
         amp_ctx = contextlib.nullcontext()
@@ -913,10 +955,20 @@ class R3(nn.Module):
                 router_alpha = self.router(router_feats)
             else:
                 router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
-            if router_alpha_override is not None:
-                alpha_used = torch.full_like(router_alpha, float(router_alpha_override))
+            out_dim = router_alpha.size(1)
+            override_tensor = self._expand_router_override(
+                router_alpha_override, len(images), out_dim
+            )
+            if override_tensor is not None:
+                alpha_used = override_tensor
             else:
                 alpha_used = router_alpha
+            if out_dim == 1:
+                alpha_prefix = alpha_used
+                alpha_latent = alpha_used
+            else:
+                alpha_prefix = alpha_used[:, 0:1]
+                alpha_latent = alpha_used[:, 1:2]
 
             prefix = None
             if prefix_tokens:
@@ -926,16 +978,18 @@ class R3(nn.Module):
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 0:1].unsqueeze(-1)
+                        * alpha_prefix.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.visual_memory is not None:
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 1:2].unsqueeze(-1)
+                        * alpha_prefix.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.latent_tokens is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * alpha_used.unsqueeze(-1))
+                    scaled_tokens.append(prefix_tokens[token_idx] * alpha_latent.unsqueeze(-1))
                     token_idx += 1
                 prefix = torch.cat(scaled_tokens, dim=1)
                 prefix = self._sanitize(prefix)
@@ -1094,6 +1148,13 @@ class R3(nn.Module):
             router_alpha = self.router(router_feats)
         else:
             router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
+        out_dim = router_alpha.size(1)
+        if out_dim == 1:
+            alpha_prefix = router_alpha
+            alpha_latent = router_alpha
+        else:
+            alpha_prefix = router_alpha[:, 0:1]
+            alpha_latent = router_alpha[:, 1:2]
         prefix = None
         if self.config.use_soft_prefix:
             prefix_tokens: List[torch.Tensor] = []
@@ -1117,16 +1178,18 @@ class R3(nn.Module):
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 0:1].unsqueeze(-1)
+                        * alpha_prefix.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.visual_memory is not None:
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 1:2].unsqueeze(-1)
+                        * alpha_prefix.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.latent_tokens is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * router_alpha.unsqueeze(-1))
+                    scaled_tokens.append(prefix_tokens[token_idx] * alpha_latent.unsqueeze(-1))
                 prefix = self._sanitize(torch.cat(scaled_tokens, dim=1))
         if self.config.enable_context:
             contexts = self._compose_context(

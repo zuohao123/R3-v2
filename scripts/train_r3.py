@@ -125,6 +125,7 @@ def main() -> None:
     parser.add_argument("--disable_router", action="store_true")
     parser.add_argument("--router_hidden", type=int, default=None)
     parser.add_argument("--router_dropout", type=float, default=None)
+    parser.add_argument("--router_out_dim", type=int, default=None)
     parser.add_argument("--router_weight", type=float, default=None)
     parser.add_argument("--router_temperature", type=float, default=None)
     parser.add_argument("--router_warmup_steps", type=int, default=None)
@@ -265,6 +266,8 @@ def main() -> None:
         cfg.r3.router_hidden = args.router_hidden
     if args.router_dropout is not None:
         cfg.r3.router_dropout = args.router_dropout
+    if args.router_out_dim is not None:
+        cfg.r3.router_out_dim = args.router_out_dim
     if args.router_weight is not None:
         cfg.loss.router_weight = args.router_weight
     if args.router_temperature is not None:
