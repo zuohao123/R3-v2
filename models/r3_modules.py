@@ -428,6 +428,23 @@ class AdaptiveGate(nn.Module):
         return torch.softmax(logits, dim=-1)
 
 
+class AdaptiveRouter(nn.Module):
+    """Predict reconstruction strength from observable confidence signals."""
+
+    def __init__(self, in_dim: int, hidden_dim: int, dropout: float = 0.1) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, feats: torch.Tensor) -> torch.Tensor:
+        logits = self.net(feats)
+        return torch.sigmoid(logits)
+
+
 class R3(nn.Module):
     """Orchestrate corruption, retrieval, and reconstruction."""
 
@@ -475,6 +492,11 @@ class R3(nn.Module):
             else None
         )
         self.gate = AdaptiveGate(config.hidden_dim) if config.enable_gate else None
+        self.router = (
+            AdaptiveRouter(config.router_in_dim, config.router_hidden, config.router_dropout)
+            if config.enable_router
+            else None
+        )
         self.vis_proj = nn.Linear(image_dim, config.hidden_dim)
 
     @staticmethod
@@ -489,6 +511,7 @@ class R3(nn.Module):
             self.visual_memory,
             self.latent_tokens,
             self.gate,
+            self.router,
             self.vis_proj,
         ]
         found = False
@@ -584,6 +607,32 @@ class R3(nn.Module):
             torch.zeros_like(weights),
         )
         return weights
+
+    def _score_mean(self, scores: Optional[np.ndarray], batch_size: int) -> torch.Tensor:
+        if scores is None:
+            return torch.zeros((batch_size, 1), device=self.qwen.device, dtype=torch.float32)
+        tensor = torch.as_tensor(scores, device=self.qwen.device, dtype=torch.float32)
+        return tensor.mean(dim=1, keepdim=True)
+
+    def _router_features(
+        self,
+        c_vis: torch.Tensor,
+        c_text: torch.Tensor,
+        gates: torch.Tensor,
+        text_scores: Optional[np.ndarray],
+        image_scores: Optional[np.ndarray],
+    ) -> torch.Tensor:
+        batch_size = c_vis.size(0)
+        latent_scale = 1.0 - (c_vis + c_text) / 2.0
+        text_mean = self._score_mean(text_scores, batch_size)
+        image_mean = self._score_mean(image_scores, batch_size)
+        eps = 1e-6
+        gate_entropy = -(gates * torch.log(gates.clamp_min(eps))).sum(dim=-1, keepdim=True)
+        feats = torch.cat(
+            [c_vis, c_text, latent_scale, text_mean, image_mean, gate_entropy],
+            dim=-1,
+        )
+        return self._sanitize(feats)
 
     def _apply_retrieval_confidence(
         self,
@@ -735,6 +784,7 @@ class R3(nn.Module):
         corruption_level: float,
         top_k: int,
         max_length: Optional[int] = None,
+        router_alpha_override: Optional[float] = None,
     ) -> Dict[str, Any]:
         device_type = self.qwen.device.type
         amp_ctx = contextlib.nullcontext()
@@ -856,18 +906,38 @@ class R3(nn.Module):
             else:
                 gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
 
+            if self.router is not None:
+                router_feats = self._router_features(
+                    c_vis, c_text, gates, text_scores, image_scores
+                )
+                router_alpha = self.router(router_feats)
+            else:
+                router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
+            if router_alpha_override is not None:
+                alpha_used = torch.full_like(router_alpha, float(router_alpha_override))
+            else:
+                alpha_used = router_alpha
+
             prefix = None
             if prefix_tokens:
                 scaled_tokens: List[torch.Tensor] = []
                 token_idx = 0
                 if self.prefix_enhancer is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 0:1].unsqueeze(-1))
+                    scaled_tokens.append(
+                        prefix_tokens[token_idx]
+                        * gates[:, 0:1].unsqueeze(-1)
+                        * alpha_used.unsqueeze(-1)
+                    )
                     token_idx += 1
                 if self.visual_memory is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 1:2].unsqueeze(-1))
+                    scaled_tokens.append(
+                        prefix_tokens[token_idx]
+                        * gates[:, 1:2].unsqueeze(-1)
+                        * alpha_used.unsqueeze(-1)
+                    )
                     token_idx += 1
                 if self.latent_tokens is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx])
+                    scaled_tokens.append(prefix_tokens[token_idx] * alpha_used.unsqueeze(-1))
                     token_idx += 1
                 prefix = torch.cat(scaled_tokens, dim=1)
                 prefix = self._sanitize(prefix)
@@ -908,6 +978,7 @@ class R3(nn.Module):
             "gates": gates.detach(),
             "c_vis": c_vis.detach(),
             "c_text": c_text.detach(),
+            "router_alpha": router_alpha,
             "retrieved_texts": retrieved_texts,
             "retrieved_image_paths": retrieved_image_paths,
             "mem_t": mem_t,
@@ -1020,6 +1091,11 @@ class R3(nn.Module):
             gates = gates / gates.sum(dim=-1, keepdim=True).clamp_min(1e-6)
         else:
             gates = torch.full((len(images), 3), 1 / 3, device=self.qwen.device)
+        if self.router is not None:
+            router_feats = self._router_features(c_vis, c_text, gates, text_scores, image_scores)
+            router_alpha = self.router(router_feats)
+        else:
+            router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
         prefix = None
         if self.config.use_soft_prefix:
             prefix_tokens: List[torch.Tensor] = []
@@ -1040,13 +1116,21 @@ class R3(nn.Module):
                 scaled_tokens: List[torch.Tensor] = []
                 token_idx = 0
                 if self.prefix_enhancer is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 0:1].unsqueeze(-1))
+                    scaled_tokens.append(
+                        prefix_tokens[token_idx]
+                        * gates[:, 0:1].unsqueeze(-1)
+                        * router_alpha.unsqueeze(-1)
+                    )
                     token_idx += 1
                 if self.visual_memory is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx] * gates[:, 1:2].unsqueeze(-1))
+                    scaled_tokens.append(
+                        prefix_tokens[token_idx]
+                        * gates[:, 1:2].unsqueeze(-1)
+                        * router_alpha.unsqueeze(-1)
+                    )
                     token_idx += 1
                 if self.latent_tokens is not None:
-                    scaled_tokens.append(prefix_tokens[token_idx])
+                    scaled_tokens.append(prefix_tokens[token_idx] * router_alpha.unsqueeze(-1))
                 prefix = self._sanitize(torch.cat(scaled_tokens, dim=1))
         if self.config.enable_context:
             contexts = self._compose_context(

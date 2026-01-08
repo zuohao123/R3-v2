@@ -121,6 +121,14 @@ def main() -> None:
     parser.add_argument("--disable_score_weighting", action="store_true")
     parser.add_argument("--r3_fp32", action="store_true", help="Run R3 modules in fp32")
     parser.add_argument("--r3_fp16", action="store_true", help="Allow autocast in R3 modules")
+    parser.add_argument("--enable_router", action="store_true")
+    parser.add_argument("--disable_router", action="store_true")
+    parser.add_argument("--router_hidden", type=int, default=None)
+    parser.add_argument("--router_dropout", type=float, default=None)
+    parser.add_argument("--router_weight", type=float, default=None)
+    parser.add_argument("--router_temperature", type=float, default=None)
+    parser.add_argument("--router_warmup_steps", type=int, default=None)
+    parser.add_argument("--train_router_only", action="store_true")
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--resume_optimizer", action="store_true")
     args = parser.parse_args()
@@ -249,6 +257,22 @@ def main() -> None:
     cfg.r3.enable_context = not args.disable_context
     if args.max_context_chars is not None:
         cfg.r3.max_context_chars = args.max_context_chars
+    if args.enable_router:
+        cfg.r3.enable_router = True
+    if args.disable_router:
+        cfg.r3.enable_router = False
+    if args.router_hidden is not None:
+        cfg.r3.router_hidden = args.router_hidden
+    if args.router_dropout is not None:
+        cfg.r3.router_dropout = args.router_dropout
+    if args.router_weight is not None:
+        cfg.loss.router_weight = args.router_weight
+    if args.router_temperature is not None:
+        cfg.loss.router_temperature = args.router_temperature
+    if args.router_warmup_steps is not None:
+        cfg.training.router_warmup_steps = args.router_warmup_steps
+    if args.train_router_only:
+        cfg.training.train_router_only = True
     if args.visual_memory_len is not None:
         cfg.r3.visual_memory_len = args.visual_memory_len
     if args.use_soft_prefix:

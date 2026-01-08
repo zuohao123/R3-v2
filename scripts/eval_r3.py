@@ -235,6 +235,10 @@ def main() -> None:
     parser.add_argument("--disable_context", action="store_true")
     parser.add_argument("--use_soft_prefix", action="store_true")
     parser.add_argument("--disable_soft_prefix", action="store_true")
+    parser.add_argument("--enable_router", action="store_true")
+    parser.add_argument("--disable_router", action="store_true")
+    parser.add_argument("--router_hidden", type=int, default=None)
+    parser.add_argument("--router_dropout", type=float, default=None)
     parser.add_argument(
         "--load_lora_adapter",
         action="store_true",
@@ -288,6 +292,14 @@ def main() -> None:
     cfg.r3.enable_latent_tokens = not args.disable_latent_tokens
     cfg.r3.enable_gate = not args.disable_gate
     cfg.r3.enable_context = not args.disable_context
+    if args.enable_router:
+        cfg.r3.enable_router = True
+    if args.disable_router:
+        cfg.r3.enable_router = False
+    if args.router_hidden is not None:
+        cfg.r3.router_hidden = args.router_hidden
+    if args.router_dropout is not None:
+        cfg.r3.router_dropout = args.router_dropout
     if args.min_text_score is not None:
         cfg.r3.min_text_score = args.min_text_score
     if args.min_image_score is not None:

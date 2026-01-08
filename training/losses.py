@@ -8,14 +8,14 @@ import torch.nn.functional as F
 
 from config.train_config import LossConfig
 
-def _safe_cross_entropy(
+def _per_sample_cross_entropy(
     logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -100
 ) -> torch.Tensor:
     logits = logits.float()
     logits = torch.nan_to_num(logits, nan=0.0, posinf=50.0, neginf=-50.0)
     logits = logits.clamp(-50.0, 50.0)
     if logits.size(1) < 2 or labels.size(1) < 2:
-        return torch.tensor(0.0, device=logits.device)
+        return torch.zeros((logits.size(0),), device=logits.device)
     shift_logits = logits[:, :-1, :].contiguous()
     shift_labels = labels[:, 1:].contiguous()
     vocab = shift_logits.size(-1)
@@ -29,6 +29,13 @@ def _safe_cross_entropy(
     mask = shift_labels.ne(ignore_index)
     denom = mask.sum(dim=1).clamp_min(1).float()
     per_sample = loss.sum(dim=1) / denom
+    return per_sample
+
+
+def _safe_cross_entropy(
+    logits: torch.Tensor, labels: torch.Tensor, ignore_index: int = -100
+) -> torch.Tensor:
+    per_sample = _per_sample_cross_entropy(logits, labels, ignore_index=ignore_index)
     return per_sample.mean()
 
 
@@ -44,6 +51,13 @@ def cross_entropy_loss(outputs: Any) -> torch.Tensor:
     if hasattr(outputs, "labels") and outputs.labels is not None and hasattr(outputs, "logits"):
         return _safe_cross_entropy(outputs.logits, outputs.labels)
     raise ValueError("Model outputs do not include a loss value.")
+
+
+def per_sample_cross_entropy(outputs: Any) -> torch.Tensor:
+    """Return per-sample CE values for router supervision."""
+    if hasattr(outputs, "labels") and outputs.labels is not None and hasattr(outputs, "logits"):
+        return _per_sample_cross_entropy(outputs.logits, outputs.labels)
+    raise ValueError("Model outputs do not include labels/logits for per-sample CE.")
 
 
 def consistency_loss(

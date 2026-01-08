@@ -77,6 +77,10 @@ class R3Config:
     use_soft_prefix: bool = True
     force_fp32: bool = True
     max_context_chars: int = 0
+    enable_router: bool = False
+    router_in_dim: int = 6
+    router_hidden: int = 128
+    router_dropout: float = 0.1
     enable_corruption: bool = True
     enable_text_retrieval: bool = True
     enable_image_retrieval: bool = True
@@ -106,6 +110,8 @@ class LossConfig:
     gate_entropy_weight: float = 0.01
     retrieval_align_weight: float = 0.05
     retrieval_align_temperature: float = 0.07
+    router_weight: float = 0.1
+    router_temperature: float = 1.0
 
 
 @dataclass
@@ -146,6 +152,8 @@ class TrainingConfig:
     sample_num: int = 1
     sample_max_new_tokens: int = 32
     gradient_checkpointing: bool = False
+    router_warmup_steps: int = 0
+    train_router_only: bool = False
     distributed_backend: str = "none"  # "none", "fsdp", "deepspeed"
     deepspeed_config: Optional[str] = None
     fsdp_min_num_params: int = 100_000_000

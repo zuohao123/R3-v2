@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel as FSDP,
@@ -40,7 +41,7 @@ from models.r3_modules import R3
 from retrieval.image_retrieval import ImageRetriever
 from retrieval.text_retrieval import TextRetriever
 from training.curriculum import CurriculumScheduler
-from training.losses import compute_total_loss
+from training.losses import compute_total_loss, per_sample_cross_entropy
 
 
 class R3TrainModule(torch.nn.Module):
@@ -238,6 +239,17 @@ class Trainer:
         with torch.no_grad():
             self.r3.sanitize_parameters()
         self._resume_from_checkpoint()
+        if self.config.training.train_router_only:
+            if self.r3.router is None:
+                raise ValueError("train_router_only requires enable_router=True")
+            for param in self.qwen.model.parameters():
+                param.requires_grad = False
+            for param in self.r3.parameters():
+                param.requires_grad = False
+            for param in self.r3.router.parameters():
+                param.requires_grad = True
+            if self.is_main_process:
+                logging.info("Training router only (backbone and R3 modules frozen).")
 
         self.engine = None
         if self.config.training.distributed_backend == "fsdp":
@@ -976,6 +988,13 @@ class Trainer:
                     self._maybe_update_ema()
                 else:
                     with self._autocast():
+                        router_override = None
+                        if self.config.r3.enable_router:
+                            if (
+                                self.config.training.train_router_only
+                                or global_step < self.config.training.router_warmup_steps
+                            ):
+                                router_override = 1.0
                         student_bundle = self.r3.forward_student(
                             corrupted["images"],
                             corrupted["questions"],
@@ -984,6 +1003,7 @@ class Trainer:
                             corruption_level,
                             self.config.retrieval.top_k,
                             max_length=self.config.data.max_length,
+                            router_alpha_override=router_override,
                         )
                         losses = compute_total_loss(
                             student_bundle,
@@ -993,6 +1013,47 @@ class Trainer:
                             loss_cfg=self.config.loss,
                         )
                         loss = losses["total"] / self.config.training.gradient_accumulation
+                    if (
+                        self.config.r3.enable_router
+                        and self.config.loss.router_weight > 0
+                        and global_step >= self.config.training.router_warmup_steps
+                    ):
+                        with torch.no_grad():
+                            full_bundle = self.r3.forward_student(
+                                corrupted["images"],
+                                corrupted["questions"],
+                                corrupted["pseudo_texts"],
+                                clean["answers"],
+                                corruption_level,
+                                self.config.retrieval.top_k,
+                                max_length=self.config.data.max_length,
+                                router_alpha_override=1.0,
+                            )
+                            rag_bundle = self.r3.forward_student(
+                                corrupted["images"],
+                                corrupted["questions"],
+                                corrupted["pseudo_texts"],
+                                clean["answers"],
+                                corruption_level,
+                                self.config.retrieval.top_k,
+                                max_length=self.config.data.max_length,
+                                router_alpha_override=0.0,
+                            )
+                        full_ce = per_sample_cross_entropy(full_bundle["outputs"])
+                        rag_ce = per_sample_cross_entropy(rag_bundle["outputs"])
+                        logits = torch.stack([-rag_ce, -full_ce], dim=-1)
+                        logits = logits / max(self.config.loss.router_temperature, 1e-6)
+                        target = torch.softmax(logits, dim=-1)
+                        p_full = target[:, 1].clamp(1e-4, 1.0 - 1e-4)
+                        alpha_pred = student_bundle.get("router_alpha")
+                        if alpha_pred is not None:
+                            alpha_pred = alpha_pred.squeeze(-1)
+                            router_loss = F.binary_cross_entropy(alpha_pred, p_full)
+                            losses["router"] = router_loss
+                            losses["total"] = losses["total"] + (
+                                self.config.loss.router_weight * router_loss
+                            )
+                            loss = losses["total"] / self.config.training.gradient_accumulation
 
                     label_ratio_val = None
                     if "label_ratio" in losses:
