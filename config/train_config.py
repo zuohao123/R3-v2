@@ -121,6 +121,8 @@ class CurriculumConfig:
     max_corruption: float = 0.8
     warmup_steps: int = 1000
     total_steps: int = 10000
+    schedule: str = "linear"  # "linear" or "cyclic"
+    cycles: int = 1
 
 
 @dataclass

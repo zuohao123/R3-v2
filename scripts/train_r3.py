@@ -96,6 +96,13 @@ def main() -> None:
     parser.add_argument("--corruption_warmup_steps", type=int, default=None)
     parser.add_argument("--corruption_total_steps", type=int, default=None)
     parser.add_argument(
+        "--corruption_schedule",
+        choices=["linear", "cyclic"],
+        default=None,
+        help="Corruption schedule type (linear or cyclic).",
+    )
+    parser.add_argument("--corruption_cycles", type=int, default=None)
+    parser.add_argument(
         "--corruption_max_severity",
         type=float,
         default=None,
@@ -248,6 +255,10 @@ def main() -> None:
         cfg.curriculum.warmup_steps = args.corruption_warmup_steps
     if args.corruption_total_steps is not None:
         cfg.curriculum.total_steps = args.corruption_total_steps
+    if args.corruption_schedule is not None:
+        cfg.curriculum.schedule = args.corruption_schedule
+    if args.corruption_cycles is not None:
+        cfg.curriculum.cycles = args.corruption_cycles
     cfg.r3.enable_text_retrieval = not args.disable_text_retrieval
     cfg.r3.enable_image_retrieval = not args.disable_image_retrieval
     cfg.r3.enable_prefix = not args.disable_prefix

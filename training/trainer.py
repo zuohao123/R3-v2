@@ -276,6 +276,8 @@ class Trainer:
             max_corruption=config.curriculum.max_corruption,
             warmup_steps=config.curriculum.warmup_steps,
             total_steps=config.curriculum.total_steps,
+            schedule=config.curriculum.schedule,
+            cycles=config.curriculum.cycles,
         )
         if config.training.max_steps is not None:
             if self.curriculum.total_steps <= 0 or self.curriculum.total_steps > config.training.max_steps:
