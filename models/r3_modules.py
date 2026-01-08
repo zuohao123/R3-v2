@@ -429,7 +429,7 @@ class AdaptiveGate(nn.Module):
 
 
 class AdaptiveRouter(nn.Module):
-    """Predict reconstruction strength from observable confidence signals."""
+    """Predict latent imputation strength from observable confidence signals."""
 
     def __init__(self, in_dim: int, hidden_dim: int, dropout: float = 0.1) -> None:
         super().__init__()
@@ -926,14 +926,12 @@ class R3(nn.Module):
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 0:1].unsqueeze(-1)
-                        * alpha_used.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.visual_memory is not None:
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 1:2].unsqueeze(-1)
-                        * alpha_used.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.latent_tokens is not None:
@@ -1119,14 +1117,12 @@ class R3(nn.Module):
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 0:1].unsqueeze(-1)
-                        * router_alpha.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.visual_memory is not None:
                     scaled_tokens.append(
                         prefix_tokens[token_idx]
                         * gates[:, 1:2].unsqueeze(-1)
-                        * router_alpha.unsqueeze(-1)
                     )
                     token_idx += 1
                 if self.latent_tokens is not None:
