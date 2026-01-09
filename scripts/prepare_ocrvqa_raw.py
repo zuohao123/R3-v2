@@ -9,9 +9,14 @@ import json
 import logging
 import os
 import re
+from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
+
+
+def _normalize_answer(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
 
 
 def _ensure_text(value: Any, fallback: str) -> str:
@@ -20,9 +25,41 @@ def _ensure_text(value: Any, fallback: str) -> str:
     if isinstance(value, list):
         value = value[0] if value else fallback
     if isinstance(value, dict):
-        value = value.get("text", value)
+        value = value.get("text", value.get("answer", value))
     text = str(value).strip()
     return text if text else fallback
+
+
+def _extract_answer_value(value: Any, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        answers: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                for key in ("answer", "text", "label", "value"):
+                    if key in item and item[key] not in (None, ""):
+                        answers.append(_ensure_text(item[key], ""))
+                        break
+                else:
+                    answers.append(_ensure_text(item, ""))
+            else:
+                answers.append(_ensure_text(item, ""))
+        answers = [a for a in answers if a]
+        if not answers:
+            return fallback
+        norms = [_normalize_answer(a) for a in answers]
+        top_norm = Counter(norms).most_common(1)[0][0]
+        for a in answers:
+            if _normalize_answer(a) == top_norm:
+                return a
+        return answers[0]
+    if isinstance(value, dict):
+        for key in ("answer", "text", "label", "value"):
+            if key in value and value[key] not in (None, ""):
+                return _ensure_text(value[key], fallback)
+        return _ensure_text(value, fallback)
+    return _ensure_text(value, fallback)
 
 
 def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
@@ -38,10 +75,10 @@ def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
     )
     for key in keys:
         if key in raw and raw[key] not in (None, ""):
-            return _ensure_text(raw[key], fallback)
+            return _extract_answer_value(raw[key], fallback)
     for key, value in raw.items():
         if "answer" in str(key).lower() and value not in (None, ""):
-            return _ensure_text(value, fallback)
+            return _extract_answer_value(value, fallback)
     return fallback
 
 

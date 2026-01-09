@@ -6,7 +6,12 @@ import argparse
 import json
 import logging
 import os
+from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional
+
+
+def _normalize_answer(text: str) -> str:
+    return " ".join(text.strip().lower().split())
 
 
 def _ensure_text(value: Any, fallback: str) -> str:
@@ -15,9 +20,41 @@ def _ensure_text(value: Any, fallback: str) -> str:
     if isinstance(value, list):
         value = value[0] if value else fallback
     if isinstance(value, dict):
-        value = value.get("text", value)
+        value = value.get("text", value.get("answer", value))
     text = str(value).strip()
     return text if text else fallback
+
+
+def _extract_answer_value(value: Any, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, list):
+        answers: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                for key in ("answer", "text", "label", "value"):
+                    if key in item and item[key] not in (None, ""):
+                        answers.append(_ensure_text(item[key], ""))
+                        break
+                else:
+                    answers.append(_ensure_text(item, ""))
+            else:
+                answers.append(_ensure_text(item, ""))
+        answers = [a for a in answers if a]
+        if not answers:
+            return fallback
+        norms = [_normalize_answer(a) for a in answers]
+        top_norm = Counter(norms).most_common(1)[0][0]
+        for a in answers:
+            if _normalize_answer(a) == top_norm:
+                return a
+        return answers[0]
+    if isinstance(value, dict):
+        for key in ("answer", "text", "label", "value"):
+            if key in value and value[key] not in (None, ""):
+                return _ensure_text(value[key], fallback)
+        return _ensure_text(value, fallback)
+    return _ensure_text(value, fallback)
 
 
 def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
@@ -32,7 +69,10 @@ def _extract_answer(raw: Dict[str, Any], fallback: str) -> str:
         "text",
     ):
         if key in raw and raw[key] not in (None, ""):
-            return _ensure_text(raw[key], fallback)
+            return _extract_answer_value(raw[key], fallback)
+    for key, value in raw.items():
+        if "answer" in str(key).lower() and value not in (None, ""):
+            return _extract_answer_value(value, fallback)
     return fallback
 
 
@@ -90,6 +130,11 @@ def main() -> None:
     parser.add_argument("--out_jsonl", required=True)
     parser.add_argument("--max_samples", type=int, default=0)
     parser.add_argument("--ocr_max_chars", type=int, default=1200)
+    parser.add_argument(
+        "--tag",
+        default="OCRVQA_CONTEXT",
+        help="Tag prefix for pseudo_text (e.g., VIZWIZ_CONTEXT).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -109,7 +154,7 @@ def main() -> None:
         ocr_text = ocr_map.get(image_path, "") or _raw_ocr_text(raw)
         if args.ocr_max_chars > 0:
             ocr_text = ocr_text[: args.ocr_max_chars]
-        pseudo_text = _compose_pseudo_text("OCRVQA_CONTEXT", question, ocr_text)
+        pseudo_text = _compose_pseudo_text(args.tag, question, ocr_text)
         records.append(
             {
                 "image_path": image_path,
