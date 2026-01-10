@@ -137,6 +137,15 @@ def main() -> None:
     parser.add_argument("--router_temperature", type=float, default=None)
     parser.add_argument("--router_warmup_steps", type=int, default=None)
     parser.add_argument("--train_router_only", action="store_true")
+    parser.add_argument(
+        "--router_supervision",
+        type=str,
+        default=None,
+        choices=["loss", "lambda"],
+        help="Router supervision: CE-based loss or corruption-level target.",
+    )
+    parser.add_argument("--router_low_threshold", type=float, default=None)
+    parser.add_argument("--router_high_threshold", type=float, default=None)
     parser.add_argument("--resume_from", type=str, default=None)
     parser.add_argument("--resume_optimizer", action="store_true")
     args = parser.parse_args()
@@ -287,6 +296,12 @@ def main() -> None:
         cfg.training.router_warmup_steps = args.router_warmup_steps
     if args.train_router_only:
         cfg.training.train_router_only = True
+    if args.router_supervision is not None:
+        cfg.training.router_supervision = args.router_supervision
+    if args.router_low_threshold is not None:
+        cfg.training.router_low_threshold = args.router_low_threshold
+    if args.router_high_threshold is not None:
+        cfg.training.router_high_threshold = args.router_high_threshold
     if args.visual_memory_len is not None:
         cfg.r3.visual_memory_len = args.visual_memory_len
     if args.use_soft_prefix:

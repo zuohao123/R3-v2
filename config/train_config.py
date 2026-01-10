@@ -157,6 +157,9 @@ class TrainingConfig:
     gradient_checkpointing: bool = False
     router_warmup_steps: int = 0
     train_router_only: bool = False
+    router_supervision: str = "loss"  # "loss" (CE-based) or "lambda" (corruption-supervised)
+    router_low_threshold: float = 0.2
+    router_high_threshold: float = 0.6
     distributed_backend: str = "none"  # "none", "fsdp", "deepspeed"
     deepspeed_config: Optional[str] = None
     fsdp_min_num_params: int = 100_000_000

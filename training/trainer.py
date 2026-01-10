@@ -1022,78 +1022,101 @@ class Trainer:
                         and self.config.loss.router_weight > 0
                         and global_step >= self.config.training.router_warmup_steps
                     ):
-                        def _with_seed(seed: int, override):
-                            py_state = random.getstate()
-                            np_state = np.random.get_state()
-                            torch_state = torch.random.get_rng_state()
-                            cuda_state = None
-                            if torch.cuda.is_available():
-                                cuda_state = torch.cuda.get_rng_state()
-                            random.seed(seed)
-                            np.random.seed(seed)
-                            torch.manual_seed(seed)
-                            if torch.cuda.is_available():
-                                torch.cuda.manual_seed_all(seed)
-                            try:
-                                return self.r3.forward_student(
-                                    corrupted["images"],
-                                    corrupted["questions"],
-                                    corrupted["pseudo_texts"],
-                                    clean["answers"],
-                                    corruption_level,
-                                    self.config.retrieval.top_k,
-                                    max_length=self.config.data.max_length,
-                                    router_alpha_override=override,
-                                )
-                            finally:
-                                random.setstate(py_state)
-                                np.random.set_state(np_state)
-                                torch.random.set_rng_state(torch_state)
-                                if cuda_state is not None:
-                                    torch.cuda.set_rng_state(cuda_state)
-
-                        seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
-                        out_dim = max(1, int(self.config.r3.router_out_dim))
-                        override_full = (1.0, 1.0) if out_dim > 1 else 1.0
-                        override_rag = (0.0, 0.0) if out_dim > 1 else 0.0
-                        override_no_latent = (1.0, 0.0) if out_dim > 1 else 1.0
-                        with torch.no_grad():
-                            full_bundle = _with_seed(seed, override_full)
-                            rag_bundle = _with_seed(seed, override_rag)
-                            no_latent_bundle = (
-                                _with_seed(seed, override_no_latent) if out_dim > 1 else None
-                            )
-                        full_ce = per_sample_cross_entropy(full_bundle["outputs"])
-                        rag_ce = per_sample_cross_entropy(rag_bundle["outputs"])
-                        logits = torch.stack([-rag_ce, -full_ce], dim=-1)
-                        logits = logits / max(self.config.loss.router_temperature, 1e-6)
-                        target = torch.softmax(logits, dim=-1)
-                        p_full = target[:, 1].clamp(1e-4, 1.0 - 1e-4)
-                        p_latent = p_full
-                        if out_dim > 1 and no_latent_bundle is not None:
-                            no_latent_ce = per_sample_cross_entropy(no_latent_bundle["outputs"])
-                            logits_latent = torch.stack([-no_latent_ce, -full_ce], dim=-1)
-                            logits_latent = logits_latent / max(
-                                self.config.loss.router_temperature, 1e-6
-                            )
-                            target_latent = torch.softmax(logits_latent, dim=-1)
-                            p_latent = target_latent[:, 1].clamp(1e-4, 1.0 - 1e-4)
+                        router_mode = self.config.training.router_supervision
                         alpha_pred = student_bundle.get("router_alpha")
-                        if alpha_pred is not None:
+                        if alpha_pred is not None and router_mode == "lambda":
+                            low = float(self.config.training.router_low_threshold)
+                            high = float(self.config.training.router_high_threshold)
+                            denom = max(high - low, 1e-6)
+                            target_val = (corruption_level - low) / denom
+                            target_val = max(0.0, min(1.0, float(target_val)))
                             if alpha_pred.dim() == 2 and alpha_pred.size(1) > 1:
-                                alpha_prefix = alpha_pred[:, 0]
-                                alpha_latent = alpha_pred[:, 1]
-                                loss_prefix = F.binary_cross_entropy(alpha_prefix, p_full)
-                                loss_latent = F.binary_cross_entropy(alpha_latent, p_latent)
+                                target_prefix = torch.full_like(alpha_pred[:, 0], target_val)
+                                target_latent = torch.full_like(alpha_pred[:, 1], target_val)
+                                loss_prefix = F.binary_cross_entropy(alpha_pred[:, 0], target_prefix)
+                                loss_latent = F.binary_cross_entropy(alpha_pred[:, 1], target_latent)
                                 router_loss = 0.5 * (loss_prefix + loss_latent)
                             else:
                                 alpha_pred = alpha_pred.squeeze(-1)
-                                router_loss = F.binary_cross_entropy(alpha_pred, p_full)
+                                target = torch.full_like(alpha_pred, target_val)
+                                router_loss = F.binary_cross_entropy(alpha_pred, target)
                             losses["router"] = router_loss
                             losses["total"] = losses["total"] + (
                                 self.config.loss.router_weight * router_loss
                             )
                             loss = losses["total"] / self.config.training.gradient_accumulation
+                        elif router_mode == "loss":
+                            def _with_seed(seed: int, override):
+                                py_state = random.getstate()
+                                np_state = np.random.get_state()
+                                torch_state = torch.random.get_rng_state()
+                                cuda_state = None
+                                if torch.cuda.is_available():
+                                    cuda_state = torch.cuda.get_rng_state()
+                                random.seed(seed)
+                                np.random.seed(seed)
+                                torch.manual_seed(seed)
+                                if torch.cuda.is_available():
+                                    torch.cuda.manual_seed_all(seed)
+                                try:
+                                    return self.r3.forward_student(
+                                        corrupted["images"],
+                                        corrupted["questions"],
+                                        corrupted["pseudo_texts"],
+                                        clean["answers"],
+                                        corruption_level,
+                                        self.config.retrieval.top_k,
+                                        max_length=self.config.data.max_length,
+                                        router_alpha_override=override,
+                                    )
+                                finally:
+                                    random.setstate(py_state)
+                                    np.random.set_state(np_state)
+                                    torch.random.set_rng_state(torch_state)
+                                    if cuda_state is not None:
+                                        torch.cuda.set_rng_state(cuda_state)
+
+                            seed = int(torch.randint(0, 2**31 - 1, (1,)).item())
+                            out_dim = max(1, int(self.config.r3.router_out_dim))
+                            override_full = (1.0, 1.0) if out_dim > 1 else 1.0
+                            override_rag = (0.0, 0.0) if out_dim > 1 else 0.0
+                            override_no_latent = (1.0, 0.0) if out_dim > 1 else 1.0
+                            with torch.no_grad():
+                                full_bundle = _with_seed(seed, override_full)
+                                rag_bundle = _with_seed(seed, override_rag)
+                                no_latent_bundle = (
+                                    _with_seed(seed, override_no_latent) if out_dim > 1 else None
+                                )
+                            full_ce = per_sample_cross_entropy(full_bundle["outputs"])
+                            rag_ce = per_sample_cross_entropy(rag_bundle["outputs"])
+                            logits = torch.stack([-rag_ce, -full_ce], dim=-1)
+                            logits = logits / max(self.config.loss.router_temperature, 1e-6)
+                            target = torch.softmax(logits, dim=-1)
+                            p_full = target[:, 1].clamp(1e-4, 1.0 - 1e-4)
+                            p_latent = p_full
+                            if out_dim > 1 and no_latent_bundle is not None:
+                                no_latent_ce = per_sample_cross_entropy(no_latent_bundle["outputs"])
+                                logits_latent = torch.stack([-no_latent_ce, -full_ce], dim=-1)
+                                logits_latent = logits_latent / max(
+                                    self.config.loss.router_temperature, 1e-6
+                                )
+                                target_latent = torch.softmax(logits_latent, dim=-1)
+                                p_latent = target_latent[:, 1].clamp(1e-4, 1.0 - 1e-4)
+                            if alpha_pred is not None:
+                                if alpha_pred.dim() == 2 and alpha_pred.size(1) > 1:
+                                    alpha_prefix = alpha_pred[:, 0]
+                                    alpha_latent = alpha_pred[:, 1]
+                                    loss_prefix = F.binary_cross_entropy(alpha_prefix, p_full)
+                                    loss_latent = F.binary_cross_entropy(alpha_latent, p_latent)
+                                    router_loss = 0.5 * (loss_prefix + loss_latent)
+                                else:
+                                    alpha_pred = alpha_pred.squeeze(-1)
+                                    router_loss = F.binary_cross_entropy(alpha_pred, p_full)
+                                losses["router"] = router_loss
+                                losses["total"] = losses["total"] + (
+                                    self.config.loss.router_weight * router_loss
+                                )
+                                loss = losses["total"] / self.config.training.gradient_accumulation
 
                     label_ratio_val = None
                     if "label_ratio" in losses:

@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import logging
 from PIL import Image
 import torch
 from torch.utils.data import Dataset
@@ -70,6 +71,7 @@ class UnifiedQACollator:
         self.max_length = max_length
         self.image_root = image_root
         self.image_size = image_size
+        self._load_failures = 0
 
     def _resolve_path(self, path: str) -> str:
         if self.image_root and not os.path.isabs(path):
@@ -77,10 +79,19 @@ class UnifiedQACollator:
         return path
 
     def _load_image(self, path: str) -> Image.Image:
-        image = Image.open(self._resolve_path(path)).convert("RGB")
-        if self.image_size:
-            image = image.resize((self.image_size, self.image_size))
-        return image
+        try:
+            image = Image.open(self._resolve_path(path)).convert("RGB")
+            if self.image_size:
+                image = image.resize((self.image_size, self.image_size))
+            return image
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            self._load_failures += 1
+            if self._load_failures <= 10:
+                logging.warning("Failed to load image %s: %s", path, exc)
+            elif self._load_failures == 11:
+                logging.warning("Suppressing further image load warnings.")
+            size = self.image_size or 448
+            return Image.new("RGB", (size, size), (0, 0, 0))
 
     def _tokenize(self, texts: List[str]) -> Optional[Dict[str, torch.Tensor]]:
         if self.tokenizer is None:
