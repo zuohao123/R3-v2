@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Audit retrieval leakage: answer-hit and self-image rates."""
+"""Audit retrieval leakage: answer-hit, near-duplicate, and overlap rates."""
 from __future__ import annotations
 
 import argparse
@@ -129,6 +129,31 @@ def _contains_answer(text: str, answers: List[str]) -> bool:
     return False
 
 
+def _token_overlap_ratio(query_tokens: List[str], doc_tokens: List[str]) -> float:
+    if not query_tokens or not doc_tokens:
+        return 0.0
+    qset = set(query_tokens)
+    dset = set(doc_tokens)
+    if not qset:
+        return 0.0
+    return len(qset & dset) / max(len(qset), 1)
+
+
+def _dhash(image: Image.Image, size: int = 8) -> int:
+    # Difference hash (dHash) for lightweight layout similarity.
+    img = image.convert("L").resize((size + 1, size), Image.BILINEAR)
+    pixels = np.asarray(img)
+    diff = pixels[:, 1:] > pixels[:, :-1]
+    hash_val = 0
+    for bit in diff.flatten():
+        hash_val = (hash_val << 1) | int(bit)
+    return hash_val
+
+
+def _hash_similarity(a: int, b: int, nbits: int = 64) -> float:
+    return 1.0 - ((a ^ b).bit_count() / nbits)
+
+
 def _iter_batches(items: List[Any], batch_size: int) -> Iterable[List[Any]]:
     for i in range(0, len(items), batch_size):
         yield items[i : i + batch_size]
@@ -152,6 +177,7 @@ def _audit_text(
     query_mode: str,
     batch_size: int,
     sim_thresholds: List[float],
+    overlap_thresholds: List[float],
 ) -> Dict[str, float]:
     hit_k = 0
     hit_1 = 0
@@ -159,6 +185,9 @@ def _audit_text(
     top1_scores: List[float] = []
     max_scores: List[float] = []
     near_dup = {thr: 0 for thr in sim_thresholds}
+    overlap_top1: List[float] = []
+    overlap_max: List[float] = []
+    overlap_near_dup = {thr: 0 for thr in overlap_thresholds}
     for batch in _iter_batches(samples, batch_size):
         queries = [
             _build_query(s.question, s.pseudo_text, query_mode) for s in batch
@@ -172,11 +201,25 @@ def _audit_text(
                 (meta.get("full_pseudo_text") or meta.get("pseudo_text") or meta.get("ocr_text") or "")
                 for meta in retrieved
             ]
+            query_tokens = _normalize_tokens(sample.pseudo_text or "")
+            overlap_scores = [
+                _token_overlap_ratio(query_tokens, _normalize_tokens(t)) for t in texts
+            ]
             count += 1
             if texts and _contains_answer(texts[0], answers):
                 hit_1 += 1
             if any(_contains_answer(t, answers) for t in texts):
                 hit_k += 1
+            if overlap_scores:
+                overlap_top1.append(overlap_scores[0])
+                max_overlap = max(overlap_scores)
+                overlap_max.append(max_overlap)
+                for thr in overlap_thresholds:
+                    if max_overlap >= thr:
+                        overlap_near_dup[thr] += 1
+            else:
+                overlap_top1.append(0.0)
+                overlap_max.append(0.0)
             if scores is not None:
                 row = scores[min(len(top1_scores), len(scores) - 1)]
                 if row.size > 0:
@@ -199,6 +242,13 @@ def _audit_text(
         "max_sim_mean": float(np.mean(max_scores)) if max_scores else 0.0,
         "max_sim_p95": float(np.percentile(max_scores, 95)) if max_scores else 0.0,
         "near_dup_rate": {str(thr): near_dup[thr] / max(count, 1) for thr in sim_thresholds},
+        "ocr_overlap_top1_mean": float(np.mean(overlap_top1)) if overlap_top1 else 0.0,
+        "ocr_overlap_top1_p95": float(np.percentile(overlap_top1, 95)) if overlap_top1 else 0.0,
+        "ocr_overlap_max_mean": float(np.mean(overlap_max)) if overlap_max else 0.0,
+        "ocr_overlap_max_p95": float(np.percentile(overlap_max, 95)) if overlap_max else 0.0,
+        "ocr_overlap_near_dup_rate": {
+            str(thr): overlap_near_dup[thr] / max(count, 1) for thr in overlap_thresholds
+        },
     }
 
 
@@ -209,6 +259,7 @@ def _audit_image(
     image_root: str,
     batch_size: int,
     sim_thresholds: List[float],
+    hash_thresholds: List[float],
 ) -> Dict[str, float]:
     hit_k = 0
     hit_1 = 0
@@ -216,13 +267,19 @@ def _audit_image(
     top1_scores: List[float] = []
     max_scores: List[float] = []
     near_dup = {thr: 0 for thr in sim_thresholds}
+    hash_top1: List[float] = []
+    hash_max: List[float] = []
+    hash_near_dup = {thr: 0 for thr in hash_thresholds}
     for batch in _iter_batches(samples, batch_size):
         images: List[Image.Image] = []
         paths: List[str] = []
+        hashes: List[int] = []
         for sample in batch:
             path = _resolve_path(image_root, sample.image_path)
             try:
-                images.append(Image.open(path).convert("RGB"))
+                img = Image.open(path).convert("RGB")
+                images.append(img)
+                hashes.append(_dhash(img))
                 paths.append(sample.image_path)
             except (FileNotFoundError, OSError):
                 continue
@@ -231,7 +288,7 @@ def _audit_image(
         result = retriever.retrieve(images, top_k)
         metas = result["metadata"]
         scores = result.get("scores")
-        for path, retrieved in zip(paths, metas):
+        for path, qhash, retrieved in zip(paths, hashes, metas):
             count += 1
             retrieved_paths = [
                 (meta.get("image_path") or "").replace("\\", "/").lstrip("./")
@@ -242,6 +299,29 @@ def _audit_image(
                 hit_1 += 1
             if target in retrieved_paths:
                 hit_k += 1
+            retrieved_hash_scores: List[float] = []
+            for meta in retrieved:
+                rpath = meta.get("image_path")
+                if not rpath:
+                    retrieved_hash_scores.append(0.0)
+                    continue
+                full_path = _resolve_path(image_root, rpath)
+                try:
+                    rimg = Image.open(full_path).convert("RGB")
+                    rhash = _dhash(rimg)
+                    retrieved_hash_scores.append(_hash_similarity(qhash, rhash))
+                except (FileNotFoundError, OSError):
+                    retrieved_hash_scores.append(0.0)
+            if retrieved_hash_scores:
+                hash_top1.append(retrieved_hash_scores[0])
+                max_hash = max(retrieved_hash_scores)
+                hash_max.append(max_hash)
+                for thr in hash_thresholds:
+                    if max_hash >= thr:
+                        hash_near_dup[thr] += 1
+            else:
+                hash_top1.append(0.0)
+                hash_max.append(0.0)
             if scores is not None:
                 row = scores[min(len(top1_scores), len(scores) - 1)]
                 if row.size > 0:
@@ -264,6 +344,13 @@ def _audit_image(
         "max_sim_mean": float(np.mean(max_scores)) if max_scores else 0.0,
         "max_sim_p95": float(np.percentile(max_scores, 95)) if max_scores else 0.0,
         "near_dup_rate": {str(thr): near_dup[thr] / max(count, 1) for thr in sim_thresholds},
+        "hash_sim_top1_mean": float(np.mean(hash_top1)) if hash_top1 else 0.0,
+        "hash_sim_top1_p95": float(np.percentile(hash_top1, 95)) if hash_top1 else 0.0,
+        "hash_sim_max_mean": float(np.mean(hash_max)) if hash_max else 0.0,
+        "hash_sim_max_p95": float(np.percentile(hash_max, 95)) if hash_max else 0.0,
+        "hash_sim_near_dup_rate": {
+            str(thr): hash_near_dup[thr] / max(count, 1) for thr in hash_thresholds
+        },
     }
 
 
@@ -285,6 +372,16 @@ def main() -> None:
         "--sim_thresholds",
         default="0.9,0.8",
         help="Comma-separated similarity thresholds for near-duplicate rate.",
+    )
+    parser.add_argument(
+        "--text_overlap_thresholds",
+        default="0.5,0.7",
+        help="Comma-separated OCR overlap thresholds for near-duplicate rate.",
+    )
+    parser.add_argument(
+        "--hash_sim_thresholds",
+        default="0.9,0.8",
+        help="Comma-separated dHash similarity thresholds for near-duplicate rate.",
     )
     parser.add_argument("--skip_text", action="store_true")
     parser.add_argument("--skip_image", action="store_true")
@@ -338,11 +435,19 @@ def main() -> None:
         )
 
     sim_thresholds = [float(x) for x in args.sim_thresholds.split(",") if x.strip()]
+    overlap_thresholds = [
+        float(x) for x in args.text_overlap_thresholds.split(",") if x.strip()
+    ]
+    hash_thresholds = [
+        float(x) for x in args.hash_sim_thresholds.split(",") if x.strip()
+    ]
     results: Dict[str, Any] = {
         "meta": {
             "top_k": args.top_k,
             "query_mode": args.query_mode,
             "sim_thresholds": sim_thresholds,
+            "text_overlap_thresholds": overlap_thresholds,
+            "hash_sim_thresholds": hash_thresholds,
         }
     }
     for name, samples in datasets.items():
@@ -356,6 +461,7 @@ def main() -> None:
                 args.query_mode,
                 args.batch_size,
                 sim_thresholds,
+                overlap_thresholds,
             )
         if image_retriever is not None:
             entry["image"] = _audit_image(
@@ -365,6 +471,7 @@ def main() -> None:
                 args.image_root,
                 args.batch_size,
                 sim_thresholds,
+                hash_thresholds,
             )
         results[name] = entry
 
