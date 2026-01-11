@@ -64,6 +64,7 @@ class R3TrainModule(torch.nn.Module):
         corruption_level: float,
         top_k: int,
         max_length: Optional[int] = None,
+        ocr_confs: Optional[torch.Tensor] = None,
     ) -> Any:
         bundle = self.r3.forward_student(
             images,
@@ -73,6 +74,7 @@ class R3TrainModule(torch.nn.Module):
             corruption_level,
             top_k,
             max_length=max_length,
+            ocr_confs=ocr_confs,
         )
         return bundle
 
@@ -860,6 +862,7 @@ class Trainer:
                         top_k=self.config.retrieval.top_k,
                         max_new_tokens=self.config.training.sample_max_new_tokens,
                         return_retrieval=True,
+                        ocr_confs=corrupted.get("ocr_confs"),
                     )
         else:
             with torch.no_grad():
@@ -871,6 +874,7 @@ class Trainer:
                     top_k=self.config.retrieval.top_k,
                     max_new_tokens=self.config.training.sample_max_new_tokens,
                     return_retrieval=True,
+                    ocr_confs=corrupted.get("ocr_confs"),
                 )
         preds, retrieved_texts, retrieved_image_paths, contexts, prompts = outputs
         self.qwen.model.train()
@@ -977,6 +981,7 @@ class Trainer:
                             corruption_level,
                             self.config.retrieval.top_k,
                             self.config.data.max_length,
+                            corrupted.get("ocr_confs"),
                         )
                         losses = compute_total_loss(
                             student_bundle,
@@ -1008,6 +1013,7 @@ class Trainer:
                             self.config.retrieval.top_k,
                             max_length=self.config.data.max_length,
                             router_alpha_override=router_override,
+                            ocr_confs=corrupted.get("ocr_confs"),
                         )
                         losses = compute_total_loss(
                             student_bundle,
@@ -1068,6 +1074,7 @@ class Trainer:
                                         self.config.retrieval.top_k,
                                         max_length=self.config.data.max_length,
                                         router_alpha_override=override,
+                                        ocr_confs=corrupted.get("ocr_confs"),
                                     )
                                 finally:
                                     random.setstate(py_state)

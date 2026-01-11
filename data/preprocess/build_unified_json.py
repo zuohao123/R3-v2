@@ -130,8 +130,8 @@ def _merge_shards(out_dir: str, dataset: str, split: str, num_shards: int) -> bo
     return True
 
 
-def _load_ocr_cache(path: Optional[str]) -> Dict[str, str]:
-    cache: Dict[str, str] = {}
+def _load_ocr_cache(path: Optional[str]) -> Dict[str, Dict[str, Any]]:
+    cache: Dict[str, Dict[str, Any]] = {}
     if not path:
         return cache
     if not os.path.exists(path):
@@ -147,13 +147,23 @@ def _load_ocr_cache(path: Optional[str]) -> Dict[str, str]:
                 continue
             text = record.get("ocr_text") or record.get("text") or record.get("value") or ""
             text = str(text).strip()
-            if text:
-                cache[key] = text
+            conf = record.get("ocr_conf") or record.get("ocr_conf_mean") or record.get("conf")
+            conf_val: Optional[float] = None
+            if conf is not None:
+                try:
+                    conf_val = float(conf)
+                except (TypeError, ValueError):
+                    conf_val = None
+            if text or conf_val is not None:
+                cache[key] = {"text": text, "conf": conf_val}
     return cache
 
 
 def _lookup_ocr(
-    image_path: str, image_prefix: Optional[str], cache: Dict[str, str], max_chars: int
+    image_path: str,
+    image_prefix: Optional[str],
+    cache: Dict[str, Dict[str, Any]],
+    max_chars: int,
 ) -> str:
     if not cache:
         return ""
@@ -161,11 +171,44 @@ def _lookup_ocr(
     if image_prefix:
         candidates.append(os.path.join(image_prefix, image_path))
     for key in candidates:
-        text = cache.get(key)
+        record = cache.get(key)
+        if not record:
+            continue
+        if isinstance(record, str):
+            text = record
+        else:
+            text = str(record.get("text", "")).strip()
         if text:
             return text[:max_chars] if max_chars > 0 else text
     return ""
 
+
+def _lookup_ocr_conf(
+    image_path: str,
+    image_prefix: Optional[str],
+    cache: Dict[str, Dict[str, Any]],
+    default_conf: float = 1.0,
+) -> float:
+    if not cache:
+        return float(default_conf)
+    candidates = [image_path]
+    if image_prefix:
+        candidates.append(os.path.join(image_prefix, image_path))
+    for key in candidates:
+        record = cache.get(key)
+        if not record:
+            continue
+        if isinstance(record, str):
+            return float(default_conf)
+        conf = record.get("conf")
+        if conf is None:
+            return float(default_conf)
+        try:
+            conf_val = float(conf)
+        except (TypeError, ValueError):
+            return float(default_conf)
+        return max(0.0, min(1.0, conf_val))
+    return float(default_conf)
 
 def _compose_pseudo_text(tag: str, question: str, ocr_text: str, extra: Optional[str] = None) -> str:
     parts = [f"{tag}: {question}"]
@@ -208,17 +251,19 @@ def build_screenqa_unified(
             missing_train += 1
             continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+        ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
                 "ocr_text": ocr_text,
-                    "pseudo_text": _compose_pseudo_text(
-                        "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
-                    ),
-                }
-            )
+                "ocr_conf": ocr_conf,
+                "pseudo_text": _compose_pseudo_text(
+                    "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
+                ),
+            }
+        )
         if log_every and ((idx + 1) % log_every == 0 or (idx + 1) == len(train_records)):
             logging.info("ScreenQA train shard %d: %d/%d", shard_id, idx + 1, len(train_records))
     _write_jsonl(os.path.join(out_dir, f"screenqa_unified_train{suffix}.jsonl"), unified_train)
@@ -246,12 +291,14 @@ def build_screenqa_unified(
             if answer == "[MISSING_ANSWER]":
                 missing_val += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+            ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
             unified_val.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
                     "ocr_text": ocr_text,
+                    "ocr_conf": ocr_conf,
                     "pseudo_text": _compose_pseudo_text(
                         "SCREENQA_CONTEXT", question, ocr_text, extra="[ANSWER_HINT]"
                     ),
@@ -309,12 +356,14 @@ def build_chartqa_unified(
             missing_train += 1
             continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+        ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
                 "ocr_text": ocr_text,
+                "ocr_conf": ocr_conf,
                 "pseudo_text": _compose_pseudo_text("CHARTQA_CONTEXT", question, ocr_text),
             }
         )
@@ -345,12 +394,14 @@ def build_chartqa_unified(
             if answer == "[MISSING_ANSWER]":
                 missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+            ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
             unified_eval.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
                     "ocr_text": ocr_text,
+                    "ocr_conf": ocr_conf,
                     "pseudo_text": _compose_pseudo_text(
                         "CHARTQA_CONTEXT", question, ocr_text
                     ),
@@ -408,12 +459,14 @@ def build_infovqa_unified(
             missing_train += 1
             continue
         ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+        ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
         unified_train.append(
             {
                 "image_path": _apply_prefix(raw["image_path"], image_prefix),
                 "question": question,
                 "answer": answer,
                 "ocr_text": ocr_text,
+                "ocr_conf": ocr_conf,
                 "pseudo_text": _compose_pseudo_text(
                     "INFOVQA_CONTEXT",
                     question,
@@ -449,12 +502,14 @@ def build_infovqa_unified(
             if answer == "[MISSING_ANSWER]":
                 missing_eval += 1
             ocr_text = _lookup_ocr(raw.get("image_path", ""), image_prefix, ocr_map, ocr_max_chars)
+            ocr_conf = _lookup_ocr_conf(raw.get("image_path", ""), image_prefix, ocr_map)
             unified_eval.append(
                 {
                     "image_path": _apply_prefix(raw["image_path"], image_prefix),
                     "question": question,
                     "answer": answer,
                     "ocr_text": ocr_text,
+                    "ocr_conf": ocr_conf,
                     "pseudo_text": _compose_pseudo_text(
                         "INFOVQA_CONTEXT",
                         question,

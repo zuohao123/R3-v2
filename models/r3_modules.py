@@ -682,11 +682,13 @@ class R3(nn.Module):
         c_text: torch.Tensor,
         text_scores: Optional[np.ndarray],
         image_scores: Optional[np.ndarray],
+        ocr_confs: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, bool]:
         conf_mode = os.getenv("R3_CONF_MODE", "sim").lower()
-        if conf_mode not in {"retrieval", "hybrid"}:
+        if conf_mode in {"sim", "oracle"}:
             return c_vis, c_text, False
         conf_alpha = float(os.getenv("R3_CONF_ALPHA", "0.5"))
+        conf_const = float(os.getenv("R3_CONF_CONST", "1.0"))
 
         def _score_conf(scores: Optional[np.ndarray]) -> Optional[torch.Tensor]:
             if scores is None:
@@ -702,11 +704,21 @@ class R3(nn.Module):
                 c_text = text_conf
             if image_conf is not None:
                 c_vis = image_conf
-        else:
+        elif conf_mode == "hybrid":
             if text_conf is not None:
                 c_text = conf_alpha * c_text + (1.0 - conf_alpha) * text_conf
             if image_conf is not None:
                 c_vis = conf_alpha * c_vis + (1.0 - conf_alpha) * image_conf
+        elif conf_mode == "ocr":
+            if ocr_confs is not None:
+                c_text = ocr_confs.to(self.qwen.device, dtype=torch.float32).clamp(0.0, 1.0)
+            if image_conf is not None:
+                c_vis = image_conf
+        elif conf_mode == "fixed":
+            c_vis = torch.full_like(c_vis, conf_const)
+            c_text = torch.full_like(c_text, conf_const)
+        else:
+            return c_vis, c_text, False
         return c_vis, c_text, True
 
     def _retrieve_texts(
@@ -827,6 +839,7 @@ class R3(nn.Module):
         top_k: int,
         max_length: Optional[int] = None,
         router_alpha_override: Optional[Any] = None,
+        ocr_confs: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         device_type = self.qwen.device.type
         amp_ctx = contextlib.nullcontext()
@@ -872,7 +885,7 @@ class R3(nn.Module):
             c_vis = c_vis.to(self.qwen.device, dtype=torch.float32)
             c_text = c_text.to(self.qwen.device, dtype=torch.float32)
             c_vis, c_text, _ = self._apply_retrieval_confidence(
-                c_vis, c_text, text_scores, image_scores
+                c_vis, c_text, text_scores, image_scores, ocr_confs
             )
 
             text_embeds = self._sanitize(text_embeds)
@@ -1048,6 +1061,7 @@ class R3(nn.Module):
         max_new_tokens: int,
         return_retrieval: bool = False,
         answer_only: bool = False,
+        ocr_confs: Optional[torch.Tensor] = None,
     ) -> Any:
         if self.config.enable_corruption:
             corr_images, corr_texts, c_vis, c_text = self.corruptor(
@@ -1109,7 +1123,7 @@ class R3(nn.Module):
         c_vis = c_vis.to(self.qwen.device, dtype=torch.float32)
         c_text = c_text.to(self.qwen.device, dtype=torch.float32)
         c_vis, c_text, use_conf = self._apply_retrieval_confidence(
-            c_vis, c_text, text_scores, image_scores
+            c_vis, c_text, text_scores, image_scores, ocr_confs
         )
         if self.memory_aligner is not None:
             mem_t, mem_i = self.memory_aligner(

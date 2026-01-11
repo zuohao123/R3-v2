@@ -327,7 +327,13 @@ def main() -> None:
         items = engine.extract(image)
         items = [item for item in items if item.conf >= args.min_conf]
         ocr_text = _postprocess(items, args.max_chars)
-        records.append({"image_path": image_path, "ocr_text": ocr_text})
+        if items:
+            ocr_conf = float(sum(item.conf for item in items) / len(items))
+        else:
+            ocr_conf = 0.0
+        records.append(
+            {"image_path": image_path, "ocr_text": ocr_text, "ocr_conf_mean": ocr_conf}
+        )
         total += 1
         if args.log_every > 0 and total % args.log_every == 0:
             logging.info("OCR progress: %d", total)

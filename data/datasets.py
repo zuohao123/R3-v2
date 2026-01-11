@@ -13,6 +13,17 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 
 
+def _safe_conf(data: Dict[str, Any]) -> float:
+    value = data.get("ocr_conf")
+    if value is None:
+        value = data.get("ocr_conf_mean", 1.0)
+    try:
+        conf = float(value)
+    except (TypeError, ValueError):
+        conf = 1.0
+    return max(0.0, min(1.0, conf))
+
+
 @dataclass
 class UnifiedQADatum:
     """Single QA record for multimodal QA."""
@@ -20,6 +31,7 @@ class UnifiedQADatum:
     question: str
     answer: str
     pseudo_text: str
+    ocr_conf: float = 1.0
 
 
 class UnifiedQADataset(Dataset):
@@ -45,6 +57,7 @@ class UnifiedQADataset(Dataset):
                         question=data["question"],
                         answer=data["answer"],
                         pseudo_text=data.get("pseudo_text", ""),
+                        ocr_conf=_safe_conf(data),
                     )
                 )
                 if max_samples is not None and len(self.samples) >= max_samples:
@@ -110,6 +123,7 @@ class UnifiedQACollator:
         questions = [item.question for item in batch]
         answers = [item.answer for item in batch]
         pseudo_texts = [item.pseudo_text for item in batch]
+        ocr_confs = [float(item.ocr_conf) for item in batch]
 
         tokenized_questions = self._tokenize(questions)
         tokenized_pseudo = self._tokenize(pseudo_texts)
@@ -128,5 +142,6 @@ class UnifiedQACollator:
                 "questions": questions,
                 "pseudo_texts": pseudo_texts,
                 "tokenized_pseudo_texts": tokenized_pseudo,
+                "ocr_confs": torch.tensor(ocr_confs, dtype=torch.float32).unsqueeze(-1),
             },
         }

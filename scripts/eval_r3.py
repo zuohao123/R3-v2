@@ -126,11 +126,19 @@ def _load_grouped_samples(
             if not line.strip():
                 continue
             data = json.loads(line)
+            ocr_conf = data.get("ocr_conf")
+            if ocr_conf is None:
+                ocr_conf = data.get("ocr_conf_mean", 1.0)
+            try:
+                ocr_conf = float(ocr_conf)
+            except (TypeError, ValueError):
+                ocr_conf = 1.0
             datum = UnifiedQADatum(
                 image_path=data["image_path"],
                 question=data["question"],
                 answer=data["answer"],
                 pseudo_text=data.get("pseudo_text", ""),
+                ocr_conf=max(0.0, min(1.0, ocr_conf)),
             )
             matched = False
             for prefix in prefixes:
@@ -241,12 +249,26 @@ def main() -> None:
     parser.add_argument("--router_dropout", type=float, default=None)
     parser.add_argument("--router_out_dim", type=int, default=None)
     parser.add_argument(
+        "--conf_mode",
+        default=None,
+        choices=["sim", "oracle", "retrieval", "hybrid", "ocr", "fixed"],
+        help="Confidence source override for R3 (default: simulator).",
+    )
+    parser.add_argument("--conf_alpha", type=float, default=None)
+    parser.add_argument("--conf_const", type=float, default=None)
+    parser.add_argument(
         "--load_lora_adapter",
         action="store_true",
         help="Load LoRA adapter weights from --checkpoint_dir if present.",
     )
     parser.add_argument("--max_context_chars", type=int, default=None)
     args = parser.parse_args()
+    if args.conf_mode:
+        os.environ["R3_CONF_MODE"] = args.conf_mode
+    if args.conf_alpha is not None:
+        os.environ["R3_CONF_ALPHA"] = str(args.conf_alpha)
+    if args.conf_const is not None:
+        os.environ["R3_CONF_CONST"] = str(args.conf_const)
 
     distributed = _is_distributed()
     rank = 0

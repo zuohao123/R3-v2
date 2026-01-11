@@ -488,6 +488,7 @@ def evaluate_model(
             images = corrupted["images"]
             questions = corrupted["questions"]
             pseudo_texts = corrupted["pseudo_texts"]
+            ocr_confs = corrupted.get("ocr_confs")
 
             batch_size = len(questions)
             want_sample = (
@@ -510,6 +511,7 @@ def evaluate_model(
                             max_new_tokens=max_new_tokens,
                             return_retrieval=True,
                             answer_only=answer_only,
+                            ocr_confs=ocr_confs,
                         )
                     else:
                         preds = model.generate(
@@ -520,6 +522,7 @@ def evaluate_model(
                             top_k=top_k,
                             max_new_tokens=max_new_tokens,
                             answer_only=answer_only,
+                            ocr_confs=ocr_confs,
                         )
             else:
                 images, questions, pseudo_texts = _apply_corruption(
