@@ -155,6 +155,7 @@ class TrainingConfig:
     sample_num: int = 1
     sample_max_new_tokens: int = 32
     gradient_checkpointing: bool = False
+    poe_fusion: bool = False
     modality_dropout_prob: float = 0.0
     modality_dropout_target: str = "random"  # "random", "text", "image"
     router_warmup_steps: int = 0

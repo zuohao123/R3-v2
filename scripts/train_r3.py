@@ -52,6 +52,11 @@ def main() -> None:
     parser.add_argument("--sample_max_new_tokens", type=int, default=32)
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument(
+        "--poe_fusion",
+        action="store_true",
+        help="Use a PoE-style text/image fusion baseline (logit-sum proxy).",
+    )
+    parser.add_argument(
         "--sampling_alpha",
         type=float,
         default=None,
@@ -231,6 +236,8 @@ def main() -> None:
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
+    if args.poe_fusion:
+        cfg.training.poe_fusion = True
     if args.modality_dropout_prob is not None:
         cfg.training.modality_dropout_prob = args.modality_dropout_prob
     if args.modality_dropout_target is not None:

@@ -190,9 +190,9 @@ def main() -> None:
     parser.add_argument("--answer_only", action="store_true")
     parser.add_argument(
         "--eval_mode",
-        choices=["r3", "base"],
+        choices=["r3", "base", "poe"],
         default="r3",
-        help="Evaluate R3 model or base Qwen model",
+        help="Evaluate R3 model, base Qwen model, or PoE fusion baseline",
     )
     parser.add_argument(
         "--corruption_levels",
@@ -390,7 +390,7 @@ def main() -> None:
         adapter_bin = os.path.join(args.checkpoint_dir, "adapter_model.bin")
         if os.path.exists(adapter_safetensors) or os.path.exists(adapter_bin):
             adapter_path = args.checkpoint_dir
-            if args.eval_mode == "r3" or args.load_lora_adapter:
+            if args.eval_mode in {"r3", "poe"} or args.load_lora_adapter:
                 cfg.model.use_lora = True
 
     qwen_cfg = QwenVLConfig(
@@ -498,7 +498,7 @@ def main() -> None:
     if args.no_pseudo_text:
         use_pseudo_text = False
 
-    corruptor = CorruptionSimulator(cfg.r3) if args.eval_mode == "base" else None
+    corruptor = CorruptionSimulator(cfg.r3) if args.eval_mode in {"base", "poe"} else None
     model = r3 if args.eval_mode == "r3" else qwen
     if dataset_prefixes:
         grouped = _load_grouped_samples(

@@ -10,8 +10,10 @@ import time
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from PIL import Image
 import torch
 
+from training.losses import per_sample_cross_entropy
 
 def normalize_answer(text: str) -> str:
     text = text.lower()
@@ -413,6 +415,17 @@ def _apply_corruption(
     return corr_images, questions, pseudo_texts
 
 
+def _blank_images(images: List[Image.Image], fallback_size: int = 224) -> List[Image.Image]:
+    blanks: List[Image.Image] = []
+    for img in images:
+        try:
+            size = img.size
+        except Exception:
+            size = (fallback_size, fallback_size)
+        blanks.append(Image.new("RGB", size, color=(0, 0, 0)))
+    return blanks
+
+
 def evaluate_model(
     model,
     dataloader,
@@ -432,10 +445,34 @@ def evaluate_model(
 ) -> Dict[float, Dict[str, float]]:
     logger = logging.getLogger(__name__)
     results: Dict[float, Dict[str, float]] = {}
-    if mode not in {"r3", "base"}:
+    def _poe_scores(
+        images: List[Image.Image],
+        blank_images: List[Image.Image],
+        questions: List[str],
+        pseudo_texts: List[str],
+        preds: List[str],
+    ) -> torch.Tensor:
+        img_outputs = model.forward_student(
+            images,
+            questions,
+            None,
+            preds,
+            max_length=None,
+        )
+        txt_outputs = model.forward_student(
+            blank_images,
+            questions,
+            pseudo_texts,
+            preds,
+            max_length=None,
+        )
+        img_ce = per_sample_cross_entropy(img_outputs)
+        txt_ce = per_sample_cross_entropy(txt_outputs)
+        return -(img_ce + txt_ce)
+    if mode not in {"r3", "base", "poe"}:
         raise ValueError(f"Unknown mode: {mode}")
     if use_pseudo_text is None:
-        use_pseudo_text = mode == "r3"
+        use_pseudo_text = mode in {"r3", "poe"}
     if not is_main_process:
         log_every = None
         sample_every = None
@@ -445,7 +482,7 @@ def evaluate_model(
     if hasattr(model, "qwen") and hasattr(model.qwen, "model"):
         model.qwen.model.eval()
     if (
-        mode == "base"
+        mode in {"base", "poe"}
         and corruptor is None
         and any(level > 0 for level in corruption_levels)
     ):
@@ -524,6 +561,47 @@ def evaluate_model(
                             answer_only=answer_only,
                             ocr_confs=ocr_confs,
                         )
+            elif mode == "poe":
+                images, questions, pseudo_texts = _apply_corruption(
+                    corruptor, images, questions, pseudo_texts, level, corrupt_text_target
+                )
+                if not use_pseudo_text:
+                    pseudo_texts = ["" for _ in questions]
+                blank_images = _blank_images(images)
+                with torch.no_grad():
+                    preds_img = model.generate_answer(
+                        images,
+                        questions,
+                        None,
+                        max_new_tokens=max_new_tokens,
+                        answer_only=answer_only,
+                    )
+                    preds_txt = model.generate_answer(
+                        blank_images,
+                        questions,
+                        pseudo_texts,
+                        max_new_tokens=max_new_tokens,
+                        answer_only=answer_only,
+                    )
+                    score_img = _poe_scores(
+                        images,
+                        blank_images,
+                        questions,
+                        pseudo_texts,
+                        preds_img,
+                    )
+                    score_txt = _poe_scores(
+                        images,
+                        blank_images,
+                        questions,
+                        pseudo_texts,
+                        preds_txt,
+                    )
+                use_img = (score_img >= score_txt).tolist()
+                preds = [
+                    preds_img[idx] if use_img[idx] else preds_txt[idx]
+                    for idx in range(batch_size)
+                ]
             else:
                 images, questions, pseudo_texts = _apply_corruption(
                     corruptor, images, questions, pseudo_texts, level, corrupt_text_target

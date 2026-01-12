@@ -9,6 +9,7 @@ import math
 import os
 import time
 import random
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, List
 
 import torch
@@ -951,6 +952,16 @@ class Trainer:
                 out_images[idx] = Image.new("RGB", size, color=(0, 0, 0))
         return out_images, out_texts, out_ocr
 
+    def _blank_images(self, images: List[Image.Image]) -> List[Image.Image]:
+        blanks: List[Image.Image] = []
+        for img in images:
+            try:
+                size = img.size
+            except Exception:
+                size = (self.config.data.image_size, self.config.data.image_size)
+            blanks.append(Image.new("RGB", size, color=(0, 0, 0)))
+        return blanks
+
     def train(self) -> None:
         total_steps = self.config.training.max_steps
         if total_steps is None:
@@ -971,6 +982,11 @@ class Trainer:
             self.engine.train()
         else:
             self.qwen.model.train()
+        if (
+            self.config.training.poe_fusion
+            and self.config.training.distributed_backend == "deepspeed"
+        ):
+            raise RuntimeError("poe_fusion is not supported with deepspeed backend.")
 
         for epoch in range(self.config.training.num_epochs):
             if self.train_sampler is not None:
@@ -1061,24 +1077,52 @@ class Trainer:
                     self._maybe_update_ema()
                 else:
                     with self._autocast():
-                        router_override = None
-                        if self.config.r3.enable_router:
-                            if (
-                                self.config.training.train_router_only
-                                or global_step < self.config.training.router_warmup_steps
-                            ):
-                                router_override = 1.0
-                        student_bundle = self.r3.forward_student(
-                            student_images,
-                            corrupted["questions"],
-                            student_texts,
-                            clean["answers"],
-                            corruption_level,
-                            self.config.retrieval.top_k,
-                            max_length=self.config.data.max_length,
-                            router_alpha_override=router_override,
-                            ocr_confs=student_ocr,
-                        )
+                        if self.config.training.poe_fusion:
+                            poe_images = student_images
+                            poe_texts = student_texts
+                            if self.config.r3.enable_corruption:
+                                poe_images, poe_texts, _, _ = self.r3.corruptor(
+                                    poe_images, poe_texts, corruption_level
+                                )
+                            blank_images = self._blank_images(poe_images)
+                            img_outputs = self.qwen.forward_student(
+                                poe_images,
+                                corrupted["questions"],
+                                None,
+                                clean["answers"],
+                                max_length=self.config.data.max_length,
+                            )
+                            txt_outputs = self.qwen.forward_student(
+                                blank_images,
+                                corrupted["questions"],
+                                poe_texts,
+                                clean["answers"],
+                                max_length=self.config.data.max_length,
+                            )
+                            fused_logits = img_outputs.logits + txt_outputs.logits
+                            student_bundle = SimpleNamespace(
+                                logits=fused_logits,
+                                labels=img_outputs.labels,
+                            )
+                        else:
+                            router_override = None
+                            if self.config.r3.enable_router:
+                                if (
+                                    self.config.training.train_router_only
+                                    or global_step < self.config.training.router_warmup_steps
+                                ):
+                                    router_override = 1.0
+                            student_bundle = self.r3.forward_student(
+                                student_images,
+                                corrupted["questions"],
+                                student_texts,
+                                clean["answers"],
+                                corruption_level,
+                                self.config.retrieval.top_k,
+                                max_length=self.config.data.max_length,
+                                router_alpha_override=router_override,
+                                ocr_confs=student_ocr,
+                            )
                         losses = compute_total_loss(
                             student_bundle,
                             teacher_outputs,
@@ -1088,7 +1132,8 @@ class Trainer:
                         )
                         loss = losses["total"] / self.config.training.gradient_accumulation
                     if (
-                        self.config.r3.enable_router
+                        not self.config.training.poe_fusion
+                        and self.config.r3.enable_router
                         and self.config.loss.router_weight > 0
                         and global_step >= self.config.training.router_warmup_steps
                     ):
