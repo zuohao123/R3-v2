@@ -576,7 +576,7 @@ class R3(nn.Module):
                         or score <= self.config.max_image_score
                     )
                 ]
-            n_text = max(1, int(round(g_t * top_k))) if texts else 0
+            n_text = max(0, int(round(g_t * top_k))) if texts else 0
             n_img = max(0, int(round(g_i * top_k))) if imgs else 0
             selected = []
             selected.extend(texts[:n_text])

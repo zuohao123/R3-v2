@@ -227,16 +227,30 @@ class Trainer:
             self.image_retriever = ImageRetriever(
                 config.retrieval.image_encoder_name, device=config.model.device
             )
-            self.text_retriever.load(
-                config.retrieval.text_index_path,
-                config.retrieval.text_meta_path,
-                config.retrieval.text_embeds_path,
-            )
-            self.image_retriever.load(
-                config.retrieval.image_index_path,
-                config.retrieval.image_meta_path,
-                config.retrieval.image_embeds_path,
-            )
+            try:
+                self.text_retriever.load(
+                    config.retrieval.text_index_path,
+                    config.retrieval.text_meta_path,
+                    config.retrieval.text_embeds_path,
+                )
+            except Exception as exc:
+                if self.is_main_process:
+                    logging.warning("Text retriever load failed; disabling text retrieval: %s", exc)
+                self.text_retriever = None
+                self.config.r3.enable_text_retrieval = False
+            try:
+                self.image_retriever.load(
+                    config.retrieval.image_index_path,
+                    config.retrieval.image_meta_path,
+                    config.retrieval.image_embeds_path,
+                )
+            except Exception as exc:
+                if self.is_main_process:
+                    logging.warning("Image retriever load failed; disabling image retrieval: %s", exc)
+                self.image_retriever = None
+                self.config.r3.enable_image_retrieval = False
+            if self.text_retriever is None and self.image_retriever is None:
+                self.config.retrieval.use_retrieval = False
 
         self.r3 = R3(self.qwen, self.text_retriever, self.image_retriever, config.r3)
         self.r3.to(self.device)
@@ -246,7 +260,11 @@ class Trainer:
         self._resume_from_checkpoint()
         if self.config.training.train_router_only:
             if self.r3.router is None:
-                raise ValueError("train_router_only requires enable_router=True")
+                if self.is_main_process:
+                    logging.warning(
+                        "train_router_only requested but router is disabled; continuing without router-only mode."
+                    )
+                self.config.training.train_router_only = False
             for param in self.qwen.model.parameters():
                 param.requires_grad = False
             for param in self.r3.parameters():
@@ -423,7 +441,14 @@ class Trainer:
         self, dataset: UnifiedQADataset, alpha: float
     ) -> torch.Tensor:
         if alpha < 0.0 or alpha > 1.0:
-            raise ValueError("sampling_alpha must be in [0, 1].")
+            clipped = max(0.0, min(1.0, alpha))
+            if self.is_main_process:
+                logging.warning(
+                    "sampling_alpha %.3f is out of [0,1]; clipping to %.3f.",
+                    alpha,
+                    clipped,
+                )
+            alpha = clipped
         counts: Dict[str, int] = {}
         for item in dataset.samples:
             name = self._dataset_name(item.image_path)
@@ -467,7 +492,12 @@ class Trainer:
             return
 
         if not torch.cuda.is_available():
-            raise RuntimeError("Distributed backend requires CUDA.")
+            logging.warning(
+                "Distributed backend requested but CUDA is unavailable; falling back to CPU."
+            )
+            self.config.training.distributed_backend = "none"
+            self.config.model.device = "cpu"
+            return
 
         torch.cuda.set_device(self.local_rank)
         self.config.model.device = f"cuda:{self.local_rank}"
@@ -698,37 +728,42 @@ class Trainer:
         return torch.autocast(device_type=self.device.type, dtype=dtype, enabled=True)
 
     def _save_checkpoint(self, step: int) -> None:
-        out_dir = os.path.join(self.config.training.output_dir, f"step_{step}")
-        os.makedirs(out_dir, exist_ok=True)
-        if self.is_main_process:
-            logging.info("Saving checkpoint to %s", out_dir)
-        if self.config.training.distributed_backend == "fsdp":
-            state_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-            with FSDP.state_dict_type(
-                self.qwen.model, StateDictType.FULL_STATE_DICT, state_cfg
-            ):
-                full_state = self.qwen.model.state_dict()
+        try:
+            out_dir = os.path.join(self.config.training.output_dir, f"step_{step}")
+            os.makedirs(out_dir, exist_ok=True)
             if self.is_main_process:
-                self.qwen.model.module.save_pretrained(out_dir, state_dict=full_state)
-        elif self.config.training.distributed_backend == "deepspeed":
-            assert self.engine is not None
-            self.engine.save_checkpoint(out_dir)
-            if not self.is_main_process:
-                return
-        else:
-            if self.is_main_process:
-                self.qwen.model.save_pretrained(out_dir)
+                logging.info("Saving checkpoint to %s", out_dir)
+            if self.config.training.distributed_backend == "fsdp":
+                state_cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+                with FSDP.state_dict_type(
+                    self.qwen.model, StateDictType.FULL_STATE_DICT, state_cfg
+                ):
+                    full_state = self.qwen.model.state_dict()
+                if self.is_main_process:
+                    self.qwen.model.module.save_pretrained(out_dir, state_dict=full_state)
+            elif self.config.training.distributed_backend == "deepspeed":
+                assert self.engine is not None
+                self.engine.save_checkpoint(out_dir)
+                if not self.is_main_process:
+                    return
+            else:
+                if self.is_main_process:
+                    self.qwen.model.save_pretrained(out_dir)
 
-        if self.is_main_process:
-            self.qwen.processor.save_pretrained(out_dir)
-            torch.save(self.r3.state_dict(), os.path.join(out_dir, "r3_state.pt"))
-            if self.optimizer is not None:
-                torch.save(self.optimizer.state_dict(), os.path.join(out_dir, "optimizer.pt"))
-            with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
-                json.dump(self.config.to_dict(), f, indent=2)
-            logging.info("Saved checkpoint to %s", out_dir)
-        if self.distributed:
-            dist.barrier()
+            if self.is_main_process:
+                self.qwen.processor.save_pretrained(out_dir)
+                torch.save(self.r3.state_dict(), os.path.join(out_dir, "r3_state.pt"))
+                if self.optimizer is not None:
+                    torch.save(self.optimizer.state_dict(), os.path.join(out_dir, "optimizer.pt"))
+                with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
+                    json.dump(self.config.to_dict(), f, indent=2)
+                logging.info("Saved checkpoint to %s", out_dir)
+        except Exception as exc:
+            if self.is_main_process:
+                logging.warning("Checkpoint save failed at step %d: %s", step, exc)
+        finally:
+            if self.distributed:
+                dist.barrier()
 
     def _clip_gradients(self) -> None:
         max_norm = self.config.training.max_grad_norm
@@ -985,7 +1020,11 @@ class Trainer:
             self.config.training.poe_fusion
             and self.config.training.distributed_backend == "deepspeed"
         ):
-            raise RuntimeError("poe_fusion is not supported with deepspeed backend.")
+            if self.is_main_process:
+                logging.warning(
+                    "poe_fusion is not supported with deepspeed; disabling poe_fusion."
+                )
+            self.config.training.poe_fusion = False
 
         for epoch in range(self.config.training.num_epochs):
             if self.train_sampler is not None:
@@ -1523,23 +1562,73 @@ class Trainer:
             logging.warning("Skipping evaluation during DeepSpeed training.")
             return
 
-        if self.config.training.distributed_backend == "fsdp" and self.distributed:
-            # Summon full params on rank0 for generation to avoid sharded weight shape issues.
-            with FSDP.summon_full_params(
-                self.qwen.model, rank0_only=True, writeback=False
-            ):
+        try:
+            if self.config.training.distributed_backend == "fsdp" and self.distributed:
+                # Summon full params on rank0 for generation to avoid sharded weight shape issues.
+                with FSDP.summon_full_params(
+                    self.qwen.model, rank0_only=True, writeback=False
+                ):
+                    if self.is_main_process:
+                        results = evaluate_model(
+                            self.r3,
+                            self.val_loader,
+                            corruption_levels=[0.0, 0.4, 0.8],
+                            max_new_tokens=self.config.evaluation.max_new_tokens,
+                            top_k=self.config.retrieval.top_k,
+                            return_sums=False,
+                        )
+                    else:
+                        results = {}
+                dist.barrier()
                 if self.is_main_process:
-                    results = evaluate_model(
-                        self.r3,
-                        self.val_loader,
-                        corruption_levels=[0.0, 0.4, 0.8],
-                        max_new_tokens=self.config.evaluation.max_new_tokens,
-                        top_k=self.config.retrieval.top_k,
-                        return_sums=False,
+                    logging.info("Evaluation:")
+                    for level, metrics in results.items():
+                        logging.info(
+                            "  corruption=%.2f | EM %.3f F1 %.3f BLEU %.3f ROUGE-L %.3f",
+                            level,
+                            metrics["exact_match"],
+                            metrics["f1"],
+                            metrics["bleu"],
+                            metrics["rouge_l"],
+                        )
+                return
+
+            results = evaluate_model(
+                self.r3,
+                self.val_loader,
+                corruption_levels=[0.0, 0.4, 0.8],
+                max_new_tokens=self.config.evaluation.max_new_tokens,
+                top_k=self.config.retrieval.top_k,
+                return_sums=self.distributed,
+            )
+
+            if self.distributed:
+                reduced: Dict[float, Dict[str, float]] = {}
+                for level, metrics in results.items():
+                    total = torch.tensor(
+                        [
+                            metrics.get("exact_match", 0.0),
+                            metrics.get("f1", 0.0),
+                            metrics.get("bleu", 0.0),
+                            metrics.get("rouge_l", 0.0),
+                        ],
+                        device=self.device,
+                        dtype=torch.float32,
                     )
-                else:
-                    results = {}
-            dist.barrier()
+                    count = torch.tensor(
+                        metrics.get("count", 0.0), device=self.device, dtype=torch.float32
+                    )
+                    dist.all_reduce(total, op=dist.ReduceOp.SUM)
+                    dist.all_reduce(count, op=dist.ReduceOp.SUM)
+                    denom = max(count.item(), 1.0)
+                    reduced[level] = {
+                        "exact_match": (total[0] / denom).item(),
+                        "f1": (total[1] / denom).item(),
+                        "bleu": (total[2] / denom).item(),
+                        "rouge_l": (total[3] / denom).item(),
+                    }
+                results = reduced
+
             if self.is_main_process:
                 logging.info("Evaluation:")
                 for level, metrics in results.items():
@@ -1551,52 +1640,12 @@ class Trainer:
                         metrics["bleu"],
                         metrics["rouge_l"],
                     )
+        except Exception as exc:
+            if self.is_main_process:
+                logging.warning("Evaluation failed; continuing training: %s", exc)
+            if self.distributed:
+                try:
+                    dist.barrier()
+                except Exception:
+                    pass
             return
-
-        results = evaluate_model(
-            self.r3,
-            self.val_loader,
-            corruption_levels=[0.0, 0.4, 0.8],
-            max_new_tokens=self.config.evaluation.max_new_tokens,
-            top_k=self.config.retrieval.top_k,
-            return_sums=self.distributed,
-        )
-
-        if self.distributed:
-            reduced: Dict[float, Dict[str, float]] = {}
-            for level, metrics in results.items():
-                total = torch.tensor(
-                    [
-                        metrics.get("exact_match", 0.0),
-                        metrics.get("f1", 0.0),
-                        metrics.get("bleu", 0.0),
-                        metrics.get("rouge_l", 0.0),
-                    ],
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                count = torch.tensor(
-                    metrics.get("count", 0.0), device=self.device, dtype=torch.float32
-                )
-                dist.all_reduce(total, op=dist.ReduceOp.SUM)
-                dist.all_reduce(count, op=dist.ReduceOp.SUM)
-                denom = max(count.item(), 1.0)
-                reduced[level] = {
-                    "exact_match": (total[0] / denom).item(),
-                    "f1": (total[1] / denom).item(),
-                    "bleu": (total[2] / denom).item(),
-                    "rouge_l": (total[3] / denom).item(),
-                }
-            results = reduced
-
-        if self.is_main_process:
-            logging.info("Evaluation:")
-            for level, metrics in results.items():
-                logging.info(
-                    "  corruption=%.2f | EM %.3f F1 %.3f BLEU %.3f ROUGE-L %.3f",
-                    level,
-                    metrics["exact_match"],
-                    metrics["f1"],
-                    metrics["bleu"],
-                    metrics["rouge_l"],
-                )
