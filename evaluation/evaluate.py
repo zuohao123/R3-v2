@@ -8,7 +8,7 @@ import os
 import re
 import time
 from collections import Counter
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
 import torch
@@ -442,6 +442,8 @@ def evaluate_model(
     sample_max: Optional[int] = None,
     is_main_process: bool = True,
     answer_only: bool = False,
+    router_alpha_override: Optional[Any] = None,
+    router_alpha_candidates: Optional[List[Any]] = None,
 ) -> Dict[float, Dict[str, float]]:
     logger = logging.getLogger(__name__)
     results: Dict[float, Dict[str, float]] = {}
@@ -469,6 +471,31 @@ def evaluate_model(
         img_ce = per_sample_cross_entropy(img_outputs)
         txt_ce = per_sample_cross_entropy(txt_outputs)
         return -(img_ce + txt_ce)
+    def _oracle_select(
+        preds_by: List[List[str]],
+        refs: List[str],
+    ) -> List[str]:
+        selected: List[str] = []
+        for idx, ref in enumerate(refs):
+            best_k = 0
+            best_em = -1.0
+            best_f1 = -1.0
+            for k, preds in enumerate(preds_by):
+                pred = _select_best_pred(preds[idx], ref)
+                em = exact_match(pred, ref)
+                if em > best_em:
+                    best_k = k
+                    best_em = em
+                    best_f1 = 0.0
+                    if em <= 0:
+                        best_f1 = f1_score(pred, ref)
+                elif em == best_em and em <= 0:
+                    f1 = f1_score(pred, ref)
+                    if f1 > best_f1:
+                        best_k = k
+                        best_f1 = f1
+            selected.append(preds_by[best_k][idx])
+        return selected
     if mode not in {"r3", "base", "poe"}:
         raise ValueError(f"Unknown mode: {mode}")
     if use_pseudo_text is None:
@@ -533,12 +560,30 @@ def evaluate_model(
                 and next_sample_at is not None
                 and (count + batch_size) >= next_sample_at
             )
+            refs = clean["answers"]
 
             if mode == "r3":
                 if not use_pseudo_text:
                     pseudo_texts = ["" for _ in questions]
                 with torch.no_grad():
-                    if want_sample:
+                    if router_alpha_candidates:
+                        preds_by = []
+                        for override in router_alpha_candidates:
+                            preds_by.append(
+                                model.generate(
+                                    images,
+                                    questions,
+                                    pseudo_texts,
+                                    corruption_level=level,
+                                    top_k=top_k,
+                                    max_new_tokens=max_new_tokens,
+                                    answer_only=answer_only,
+                                    ocr_confs=ocr_confs,
+                                    router_alpha_override=override,
+                                )
+                            )
+                        preds = _oracle_select(preds_by, refs)
+                    elif want_sample:
                         preds, retrieved_texts, retrieved_images, contexts, prompts = model.generate(
                             images,
                             questions,
@@ -549,6 +594,7 @@ def evaluate_model(
                             return_retrieval=True,
                             answer_only=answer_only,
                             ocr_confs=ocr_confs,
+                            router_alpha_override=router_alpha_override,
                         )
                     else:
                         preds = model.generate(
@@ -560,6 +606,7 @@ def evaluate_model(
                             max_new_tokens=max_new_tokens,
                             answer_only=answer_only,
                             ocr_confs=ocr_confs,
+                            router_alpha_override=router_alpha_override,
                         )
             elif mode == "poe":
                 images, questions, pseudo_texts = _apply_corruption(
@@ -615,7 +662,6 @@ def evaluate_model(
                         answer_only=answer_only,
                     )
 
-            refs = clean["answers"]
             count_before = count
             for pred, ref in zip(preds, refs):
                 sums.update(_compute_metrics(pred, ref))
@@ -636,10 +682,10 @@ def evaluate_model(
                 logger.info("  MODEL pred_raw: %s", _truncate(pred_text))
                 logger.info("  MODEL pred_best: %s", _truncate(pred_best))
                 if mode == "r3" and want_sample:
-                    if retrieved_texts:
+                    if "retrieved_texts" in locals() and retrieved_texts:
                         shown = retrieved_texts[sample_idx][: min(3, len(retrieved_texts[sample_idx]))]
                         logger.info("  RETRIEVAL texts: %s", " || ".join(_truncate(t) for t in shown))
-                    if retrieved_images:
+                    if "retrieved_images" in locals() and retrieved_images:
                         shown_imgs = retrieved_images[sample_idx][: min(3, len(retrieved_images[sample_idx]))]
                         logger.info("  RETRIEVAL images: %s", " || ".join(_truncate(p) for p in shown_imgs))
                     if "contexts" in locals():

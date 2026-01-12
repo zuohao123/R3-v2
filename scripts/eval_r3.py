@@ -38,6 +38,33 @@ def _parse_levels(value: str) -> List[float]:
     return [float(x) for x in value.split(",") if x.strip()]
 
 
+def _parse_router_override(value: Optional[str]) -> Optional[Any]:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith("heuristic"):
+        return lowered
+    if "," in text:
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        return tuple(float(p) for p in parts)
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _parse_router_override_list(value: Optional[str]) -> Optional[List[Any]]:
+    if value is None:
+        return None
+    items = [item.strip() for item in value.split(";") if item.strip()]
+    if not items:
+        return None
+    return [_parse_router_override(item) for item in items]
+
+
 def _is_distributed() -> bool:
     return "RANK" in os.environ and "WORLD_SIZE" in os.environ
 
@@ -248,6 +275,22 @@ def main() -> None:
     parser.add_argument("--router_hidden", type=int, default=None)
     parser.add_argument("--router_dropout", type=float, default=None)
     parser.add_argument("--router_out_dim", type=int, default=None)
+    parser.add_argument(
+        "--router_override",
+        default=None,
+        help=(
+            "Override router alpha (e.g., 0.0, 1.0, 1,0) or heuristic_* "
+            "(heuristic_linear|heuristic_thresh|heuristic_retrieval)."
+        ),
+    )
+    parser.add_argument(
+        "--router_override_list",
+        default=None,
+        help=(
+            "Semicolon-separated overrides for oracle selection "
+            "(e.g., '1,1;1,0;0,0' or 'heuristic_linear;heuristic_thresh')."
+        ),
+    )
     parser.add_argument(
         "--conf_mode",
         default=None,
@@ -497,6 +540,10 @@ def main() -> None:
         use_pseudo_text = True
     if args.no_pseudo_text:
         use_pseudo_text = False
+    router_override = _parse_router_override(args.router_override)
+    router_override_list = _parse_router_override_list(args.router_override_list)
+    if router_override is not None and router_override_list is not None:
+        raise ValueError("Set either --router_override or --router_override_list, not both.")
 
     corruptor = CorruptionSimulator(cfg.r3) if args.eval_mode in {"base", "poe"} else None
     model = r3 if args.eval_mode == "r3" else qwen
@@ -538,6 +585,8 @@ def main() -> None:
                 sample_max=args.sample_max,
                 is_main_process=is_main_process,
                 answer_only=args.answer_only,
+                router_alpha_override=router_override,
+                router_alpha_candidates=router_override_list,
             )
             if distributed:
                 results = _reduce_metrics(results, device=cfg.model.device)
@@ -567,6 +616,8 @@ def main() -> None:
         sample_max=args.sample_max,
         is_main_process=is_main_process,
         answer_only=args.answer_only,
+        router_alpha_override=router_override,
+        router_alpha_candidates=router_override_list,
     )
     if distributed:
         results = _reduce_metrics(results, device=cfg.model.device)

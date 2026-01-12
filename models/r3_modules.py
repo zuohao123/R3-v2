@@ -676,6 +676,68 @@ class R3(nn.Module):
             return tensor
         raise ValueError("Unsupported router_alpha_override type.")
 
+    def _heuristic_router_alpha(
+        self,
+        mode: str,
+        c_vis: torch.Tensor,
+        c_text: torch.Tensor,
+        text_scores: Optional[np.ndarray],
+        image_scores: Optional[np.ndarray],
+        out_dim: int,
+    ) -> torch.Tensor:
+        mode = mode.lower()
+        conf = torch.minimum(c_vis, c_text)
+        alpha_linear = (1.0 - (c_vis + c_text) / 2.0).clamp(0.0, 1.0)
+        if mode in {"heuristic_linear", "linear"}:
+            alpha_prefix = alpha_linear
+            alpha_latent = alpha_linear
+        else:
+            low = float(os.getenv("R3_ROUTER_HEUR_LOW", "0.5"))
+            high = float(os.getenv("R3_ROUTER_HEUR_HIGH", "0.8"))
+            lat = float(os.getenv("R3_ROUTER_HEUR_LAT", "0.4"))
+            denom = max(high - low, 1e-6)
+            alpha_prefix = ((high - conf) / denom).clamp(0.0, 1.0)
+            alpha_latent = (conf < lat).float()
+            if mode in {"heuristic_retrieval", "heuristic_ret"}:
+                def _score_conf(scores: Optional[np.ndarray]) -> Optional[torch.Tensor]:
+                    if scores is None:
+                        return None
+                    tensor = torch.as_tensor(
+                        scores, device=self.qwen.device, dtype=torch.float32
+                    )
+                    conf_val = (tensor.mean(dim=1, keepdim=True) + 1.0) / 2.0
+                    return conf_val.clamp(0.0, 1.0)
+                text_conf = _score_conf(text_scores)
+                image_conf = _score_conf(image_scores)
+                if text_conf is not None and image_conf is not None:
+                    ret_conf = 0.5 * (text_conf + image_conf)
+                else:
+                    ret_conf = text_conf if text_conf is not None else image_conf
+                if ret_conf is None:
+                    ret_conf = torch.zeros_like(conf)
+                ret_thr = float(os.getenv("R3_ROUTER_HEUR_RET", "0.6"))
+                alpha_latent = alpha_latent * (ret_conf < ret_thr).float()
+        if out_dim == 1:
+            return alpha_prefix
+        return torch.cat([alpha_prefix, alpha_latent], dim=-1)
+
+    def _resolve_router_override(
+        self,
+        override: Optional[Any],
+        c_vis: torch.Tensor,
+        c_text: torch.Tensor,
+        text_scores: Optional[np.ndarray],
+        image_scores: Optional[np.ndarray],
+        out_dim: int,
+    ) -> Optional[torch.Tensor]:
+        if override is None:
+            return None
+        if isinstance(override, str):
+            return self._heuristic_router_alpha(
+                override, c_vis, c_text, text_scores, image_scores, out_dim
+            )
+        return self._expand_router_override(override, c_vis.size(0), out_dim)
+
     def _apply_retrieval_confidence(
         self,
         c_vis: torch.Tensor,
@@ -969,8 +1031,13 @@ class R3(nn.Module):
             else:
                 router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
             out_dim = router_alpha.size(1)
-            override_tensor = self._expand_router_override(
-                router_alpha_override, len(images), out_dim
+            override_tensor = self._resolve_router_override(
+                router_alpha_override,
+                c_vis,
+                c_text,
+                text_scores,
+                image_scores,
+                out_dim,
             )
             if override_tensor is not None:
                 alpha_used = override_tensor
@@ -1062,6 +1129,7 @@ class R3(nn.Module):
         return_retrieval: bool = False,
         answer_only: bool = False,
         ocr_confs: Optional[torch.Tensor] = None,
+        router_alpha_override: Optional[Any] = None,
     ) -> Any:
         if self.config.enable_corruption:
             corr_images, corr_texts, c_vis, c_text = self.corruptor(
@@ -1163,12 +1231,24 @@ class R3(nn.Module):
         else:
             router_alpha = torch.ones((len(images), 1), device=self.qwen.device)
         out_dim = router_alpha.size(1)
-        if out_dim == 1:
-            alpha_prefix = router_alpha
-            alpha_latent = router_alpha
+        override_tensor = self._resolve_router_override(
+            router_alpha_override,
+            c_vis,
+            c_text,
+            text_scores,
+            image_scores,
+            out_dim,
+        )
+        if override_tensor is not None:
+            alpha_used = override_tensor
         else:
-            alpha_prefix = router_alpha[:, 0:1]
-            alpha_latent = router_alpha[:, 1:2]
+            alpha_used = router_alpha
+        if out_dim == 1:
+            alpha_prefix = alpha_used
+            alpha_latent = alpha_used
+        else:
+            alpha_prefix = alpha_used[:, 0:1]
+            alpha_latent = alpha_used[:, 1:2]
         prefix = None
         if self.config.use_soft_prefix:
             prefix_tokens: List[torch.Tensor] = []
