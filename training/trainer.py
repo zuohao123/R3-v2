@@ -9,7 +9,6 @@ import math
 import os
 import time
 import random
-from types import SimpleNamespace
 from typing import Any, Dict, Optional, List
 
 import torch
@@ -1099,11 +1098,37 @@ class Trainer:
                                 clean["answers"],
                                 max_length=self.config.data.max_length,
                             )
-                            fused_logits = img_outputs.logits + txt_outputs.logits
-                            student_bundle = SimpleNamespace(
-                                logits=fused_logits,
-                                labels=img_outputs.labels,
-                            )
+                            img_ce = per_sample_cross_entropy(img_outputs).mean()
+                            txt_ce = per_sample_cross_entropy(txt_outputs).mean()
+                            total = img_ce + txt_ce
+                            ratio_img = 0.0
+                            ratio_txt = 0.0
+                            if hasattr(img_outputs, "labels") and img_outputs.labels is not None:
+                                if img_outputs.labels.size(1) >= 2:
+                                    ratio_img = (
+                                        img_outputs.labels[:, 1:]
+                                        .ne(-100)
+                                        .float()
+                                        .mean()
+                                        .item()
+                                    )
+                            if hasattr(txt_outputs, "labels") and txt_outputs.labels is not None:
+                                if txt_outputs.labels.size(1) >= 2:
+                                    ratio_txt = (
+                                        txt_outputs.labels[:, 1:]
+                                        .ne(-100)
+                                        .float()
+                                        .mean()
+                                        .item()
+                                    )
+                            label_ratio = 0.5 * (ratio_img + ratio_txt)
+                            losses = {
+                                "total": total,
+                                "ce": total,
+                                "ce_img": img_ce,
+                                "ce_txt": txt_ce,
+                                "label_ratio": torch.tensor(label_ratio, device=total.device),
+                            }
                         else:
                             router_override = None
                             if self.config.r3.enable_router:
@@ -1123,14 +1148,17 @@ class Trainer:
                                 router_alpha_override=router_override,
                                 ocr_confs=student_ocr,
                             )
-                        losses = compute_total_loss(
-                            student_bundle,
-                            teacher_outputs,
-                            self.config.loss.consistency_weight,
-                            self.config.loss.temperature,
-                            loss_cfg=self.config.loss,
-                        )
-                        loss = losses["total"] / self.config.training.gradient_accumulation
+                        if self.config.training.poe_fusion:
+                            loss = losses["total"] / self.config.training.gradient_accumulation
+                        else:
+                            losses = compute_total_loss(
+                                student_bundle,
+                                teacher_outputs,
+                                self.config.loss.consistency_weight,
+                                self.config.loss.temperature,
+                                loss_cfg=self.config.loss,
+                            )
+                            loss = losses["total"] / self.config.training.gradient_accumulation
                     if (
                         not self.config.training.poe_fusion
                         and self.config.r3.enable_router
