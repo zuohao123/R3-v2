@@ -9,12 +9,13 @@ import math
 import os
 import time
 import random
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 import numpy as np
+from PIL import Image
 from torch.distributed.fsdp import (
     CPUOffload,
     FullyShardedDataParallel as FSDP,
@@ -907,6 +908,49 @@ class Trainer:
                     logging.info("  MODEL input_text: %s", self._truncate(prompts[idx], 600))
                 logging.info("  MODEL pred: %s", self._truncate(preds[idx]))
 
+    def _sample_modality_dropout(self, batch_size: int) -> Optional[List[Optional[str]]]:
+        prob = float(self.config.training.modality_dropout_prob or 0.0)
+        if prob <= 0.0:
+            return None
+        target = (self.config.training.modality_dropout_target or "random").lower()
+        drops: List[Optional[str]] = []
+        for _ in range(batch_size):
+            if random.random() >= prob:
+                drops.append(None)
+                continue
+            if target == "random":
+                drops.append("text" if random.random() < 0.5 else "image")
+            elif target in ("text", "image"):
+                drops.append(target)
+            else:
+                drops.append(None)
+        return drops
+
+    def _apply_modality_dropout(
+        self,
+        images: List[Image.Image],
+        pseudo_texts: List[str],
+        ocr_confs: Optional[torch.Tensor],
+        drops: Optional[List[Optional[str]]],
+    ) -> tuple[list[Image.Image], list[str], Optional[torch.Tensor]]:
+        if not drops:
+            return images, pseudo_texts, ocr_confs
+        out_images = list(images)
+        out_texts = list(pseudo_texts)
+        out_ocr = ocr_confs.clone() if ocr_confs is not None else None
+        for idx, drop in enumerate(drops):
+            if drop == "text":
+                out_texts[idx] = ""
+                if out_ocr is not None:
+                    out_ocr[idx] = 0.0
+            elif drop == "image":
+                try:
+                    size = images[idx].size
+                except Exception:
+                    size = (self.config.data.image_size, self.config.data.image_size)
+                out_images[idx] = Image.new("RGB", size, color=(0, 0, 0))
+        return out_images, out_texts, out_ocr
+
     def train(self) -> None:
         total_steps = self.config.training.max_steps
         if total_steps is None:
@@ -941,6 +985,26 @@ class Trainer:
                 corruption_level = self.curriculum.get_level(global_step)
                 clean = batch["clean"]
                 corrupted = batch["corrupted"]
+                drops = self._sample_modality_dropout(len(corrupted["images"]))
+                if drops:
+                    student_images, student_texts, student_ocr = self._apply_modality_dropout(
+                        corrupted["images"],
+                        corrupted["pseudo_texts"],
+                        corrupted.get("ocr_confs"),
+                        drops,
+                    )
+                    teacher_images, teacher_texts, _ = self._apply_modality_dropout(
+                        clean["images"],
+                        corrupted["pseudo_texts"],
+                        None,
+                        drops,
+                    )
+                else:
+                    student_images = corrupted["images"]
+                    student_texts = corrupted["pseudo_texts"]
+                    student_ocr = corrupted.get("ocr_confs")
+                    teacher_images = clean["images"]
+                    teacher_texts = corrupted["pseudo_texts"]
                 if any(not ans for ans in clean["answers"]):
                     clean["answers"] = [ans if ans else "unknown" for ans in clean["answers"]]
 
@@ -948,24 +1012,24 @@ class Trainer:
                 if self.config.training.use_teacher:
                     if self.teacher_mode == "ema":
                         teacher_outputs = self._forward_teacher_ema(
-                            clean["images"],
+                            teacher_images,
                             clean["questions"],
-                            corrupted["pseudo_texts"],
+                            teacher_texts,
                             clean["answers"],
                         )
                     elif self.teacher_mode == "shared":
                         teacher_outputs = self._forward_teacher_shared(
-                            clean["images"],
+                            teacher_images,
                             clean["questions"],
-                            corrupted["pseudo_texts"],
+                            teacher_texts,
                             clean["answers"],
                         )
                     else:
                         with self._autocast():
                             teacher_outputs = self.qwen.forward_teacher(
-                                clean["images"],
+                                teacher_images,
                                 clean["questions"],
-                                corrupted["pseudo_texts"],
+                                teacher_texts,
                                 clean["answers"],
                                 max_length=self.config.data.max_length,
                             )
@@ -974,14 +1038,14 @@ class Trainer:
                     with self._autocast():
                         assert self.engine is not None
                         student_bundle = self.engine(
-                            corrupted["images"],
+                            student_images,
                             corrupted["questions"],
-                            corrupted["pseudo_texts"],
+                            student_texts,
                             clean["answers"],
                             corruption_level,
                             self.config.retrieval.top_k,
                             self.config.data.max_length,
-                            corrupted.get("ocr_confs"),
+                            student_ocr,
                         )
                         losses = compute_total_loss(
                             student_bundle,
@@ -1005,15 +1069,15 @@ class Trainer:
                             ):
                                 router_override = 1.0
                         student_bundle = self.r3.forward_student(
-                            corrupted["images"],
+                            student_images,
                             corrupted["questions"],
-                            corrupted["pseudo_texts"],
+                            student_texts,
                             clean["answers"],
                             corruption_level,
                             self.config.retrieval.top_k,
                             max_length=self.config.data.max_length,
                             router_alpha_override=router_override,
-                            ocr_confs=corrupted.get("ocr_confs"),
+                            ocr_confs=student_ocr,
                         )
                         losses = compute_total_loss(
                             student_bundle,

@@ -155,6 +155,8 @@ class TrainingConfig:
     sample_num: int = 1
     sample_max_new_tokens: int = 32
     gradient_checkpointing: bool = False
+    modality_dropout_prob: float = 0.0
+    modality_dropout_target: str = "random"  # "random", "text", "image"
     router_warmup_steps: int = 0
     train_router_only: bool = False
     router_supervision: str = "loss"  # "loss" (CE-based) or "lambda" (corruption-supervised)

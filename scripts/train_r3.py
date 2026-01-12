@@ -57,6 +57,18 @@ def main() -> None:
         default=None,
         help="Temperature sampling alpha in [0,1]; smaller = more balanced",
     )
+    parser.add_argument(
+        "--modality_dropout_prob",
+        type=float,
+        default=None,
+        help="Probability to drop exactly one modality per sample during training.",
+    )
+    parser.add_argument(
+        "--modality_dropout_target",
+        choices=["random", "text", "image"],
+        default=None,
+        help="Which modality to drop when modality dropout is applied.",
+    )
     parser.add_argument("--use_lora", action="store_true")
     parser.add_argument(
         "--lora_targets",
@@ -219,6 +231,10 @@ def main() -> None:
     cfg.training.sample_every = args.sample_every
     cfg.training.sample_num = args.sample_num
     cfg.training.sample_max_new_tokens = args.sample_max_new_tokens
+    if args.modality_dropout_prob is not None:
+        cfg.training.modality_dropout_prob = args.modality_dropout_prob
+    if args.modality_dropout_target is not None:
+        cfg.training.modality_dropout_target = args.modality_dropout_target
     cfg.training.gradient_checkpointing = args.gradient_checkpointing
     cfg.training.sampling_alpha = args.sampling_alpha
     cfg.model.use_lora = args.use_lora
