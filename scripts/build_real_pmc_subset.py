@@ -151,7 +151,7 @@ def _compute_low_var_ratios(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a real-PMC eval subset.")
-    parser.add_argument("--val_jsonl", required=True, help="Input eval JSONL.")
+    parser.add_argument("--val_jsonl", default=None, help="Input eval JSONL.")
     parser.add_argument("--out_jsonl", required=True, help="Output subset JSONL.")
     parser.add_argument("--ocr_jsonl", default=None, help="Optional OCR cache JSONL.")
     parser.add_argument("--image_root", default=None, help="Root directory for images.")
@@ -196,6 +196,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     prefixes = [p.strip() for p in args.dataset_prefixes.split(",") if p.strip()]
 
+    if not args.merge_shards and not args.val_jsonl:
+        parser.error("--val_jsonl is required unless --merge_shards is set.")
     if args.num_shards < 1:
         raise ValueError("--num_shards must be >= 1")
     if args.shard_id < 0 or args.shard_id >= args.num_shards:
