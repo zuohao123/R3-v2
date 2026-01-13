@@ -38,15 +38,18 @@ class _ListQADataset(Dataset):
         return self.samples[idx]
 
 
-class _FixedCorruptor:
+class _FixedCorruptor(torch.nn.Module):
     def __init__(self, images, texts, c_vis, c_text) -> None:
+        super().__init__()
         self.images = images
         self.texts = texts
         self.c_vis = c_vis
         self.c_text = c_text
 
-    def __call__(self, *_args, **_kwargs):
+    def forward(self, *_args, **_kwargs):
         return self.images, self.texts, self.c_vis, self.c_text
+
+    __call__ = forward
 
 
 def _update_dataclass(cfg: Any, updates: Dict[str, Any]) -> None:
