@@ -511,10 +511,10 @@ def evaluate_model(
                         best_f1 = f1
             selected.append(preds_by[best_k][idx])
         return selected
-    if mode not in {"r3", "base", "poe"}:
+    if mode not in {"r3", "base", "poe", "cagate", "ronly"}:
         raise ValueError(f"Unknown mode: {mode}")
     if use_pseudo_text is None:
-        use_pseudo_text = mode in {"r3", "poe"}
+        use_pseudo_text = mode in {"r3", "poe", "cagate", "ronly"}
     if not is_main_process:
         log_every = None
         sample_every = None
