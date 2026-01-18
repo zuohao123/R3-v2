@@ -217,9 +217,9 @@ def main() -> None:
     parser.add_argument("--answer_only", action="store_true")
     parser.add_argument(
         "--eval_mode",
-        choices=["r3", "base", "poe"],
+        choices=["r3", "base", "poe", "cagate", "ronly"],
         default="r3",
-        help="Evaluate R3 model, base Qwen model, or PoE fusion baseline",
+        help="Evaluate R3 model, base Qwen model, PoE fusion, or inference-only baselines",
     )
     parser.add_argument(
         "--corruption_levels",
@@ -424,8 +424,10 @@ def main() -> None:
     elif args.checkpoint_dir and not cfg.model.model_name:
         cfg.model.model_name = args.checkpoint_dir
 
-    if args.eval_mode == "r3" and not cfg.model.model_name:
-        raise ValueError("--checkpoint_dir or --model_name is required for eval_mode=r3")
+    if args.eval_mode in {"r3", "cagate", "ronly"} and not cfg.model.model_name:
+        raise ValueError(
+            "--checkpoint_dir or --model_name is required for eval_mode=r3/cagate/ronly"
+        )
 
     adapter_path = None
     if args.checkpoint_dir:
@@ -433,7 +435,7 @@ def main() -> None:
         adapter_bin = os.path.join(args.checkpoint_dir, "adapter_model.bin")
         if os.path.exists(adapter_safetensors) or os.path.exists(adapter_bin):
             adapter_path = args.checkpoint_dir
-            if args.eval_mode in {"r3", "poe"} or args.load_lora_adapter:
+            if args.eval_mode in {"r3", "poe", "cagate", "ronly"} or args.load_lora_adapter:
                 cfg.model.use_lora = True
 
     qwen_cfg = QwenVLConfig(
@@ -451,7 +453,7 @@ def main() -> None:
     if adapter_path and cfg.model.use_lora:
         qwen.load_lora_adapter(adapter_path)
     r3 = None
-    if args.eval_mode == "r3":
+    if args.eval_mode in {"r3", "cagate", "ronly"}:
         text_retriever = None
         image_retriever = None
         text_index_ready = os.path.exists(cfg.retrieval.text_index_path) and os.path.exists(
@@ -546,7 +548,7 @@ def main() -> None:
         raise ValueError("Set either --router_override or --router_override_list, not both.")
 
     corruptor = CorruptionSimulator(cfg.r3) if args.eval_mode in {"base", "poe"} else None
-    model = r3 if args.eval_mode == "r3" else qwen
+    model = r3 if args.eval_mode in {"r3", "cagate", "ronly"} else qwen
     if dataset_prefixes:
         grouped = _load_grouped_samples(
             cfg.data.val_jsonl, dataset_prefixes, cfg.evaluation.max_eval_samples

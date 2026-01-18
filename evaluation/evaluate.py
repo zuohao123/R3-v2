@@ -426,6 +426,21 @@ def _blank_images(images: List[Image.Image], fallback_size: int = 224) -> List[I
     return blanks
 
 
+_OCR_RE = re.compile(r"(?:^|\\b)OCR\\s*:\\s*(.*)$", re.IGNORECASE)
+
+
+def _extract_ocr_from_pseudo(text: str) -> str:
+    if not text:
+        return ""
+    match = _OCR_RE.search(text)
+    return match.group(1).strip() if match else ""
+
+
+def _softmax_weights(values: torch.Tensor, alpha: float) -> torch.Tensor:
+    scaled = values * alpha
+    return torch.softmax(scaled, dim=-1)
+
+
 def evaluate_model(
     model,
     dataloader,
@@ -649,6 +664,64 @@ def evaluate_model(
                     preds_img[idx] if use_img[idx] else preds_txt[idx]
                     for idx in range(batch_size)
                 ]
+            elif mode in {"cagate", "ronly"}:
+                if not hasattr(model, "qwen") or not hasattr(model, "_retrieve_texts"):
+                    raise ValueError("CA-Gate/R-only require an R3 model instance.")
+                r3 = model
+                if use_pseudo_text is False:
+                    pseudo_texts = ["" for _ in questions]
+                if use_pseudo_text is False:
+                    ocr_confs = None
+                if r3.config.enable_corruption:
+                    corr_images, corr_texts, _, _ = r3.corruptor(
+                        images, pseudo_texts, level
+                    )
+                else:
+                    corr_images, corr_texts = images, pseudo_texts
+                queries = [f"{q} {t}".strip() for q, t in zip(questions, corr_texts)]
+                _, retrieved_texts, text_scores = r3._retrieve_texts(queries, top_k)
+
+                if mode == "ronly":
+                    evidence_texts = [" ".join(texts).strip() for texts in retrieved_texts]
+                else:
+                    ocr_texts = [_extract_ocr_from_pseudo(t) for t in corr_texts]
+                    device = r3.qwen.device
+                    if ocr_confs is not None:
+                        r_ocr = ocr_confs.squeeze(-1).to(device, dtype=torch.float32)
+                    else:
+                        lengths = torch.tensor(
+                            [float(len(t)) for t in ocr_texts], device=device
+                        )
+                        max_len = lengths.max().clamp_min(1.0)
+                        r_ocr = lengths / max_len
+                    if text_scores is not None:
+                        r_ret = torch.as_tensor(
+                            text_scores[:, 0], device=device, dtype=torch.float32
+                        )
+                    else:
+                        r_ret = torch.zeros_like(r_ocr)
+                    scores = torch.stack([r_ocr, r_ret], dim=-1)
+                    weights = _softmax_weights(scores, alpha=5.0)
+                    choose_ocr = weights[:, 0] >= weights[:, 1]
+                    evidence_texts = []
+                    for idx, use_ocr in enumerate(choose_ocr.tolist()):
+                        if use_ocr:
+                            evidence_texts.append(ocr_texts[idx])
+                        else:
+                            evidence_texts.append(" ".join(retrieved_texts[idx]).strip())
+
+                max_ctx = getattr(r3.config, "max_context_chars", 0)
+                if max_ctx and max_ctx > 0:
+                    evidence_texts = [text[:max_ctx] for text in evidence_texts]
+
+                with torch.no_grad():
+                    preds = r3.qwen.generate_answer(
+                        corr_images,
+                        questions,
+                        evidence_texts,
+                        max_new_tokens=max_new_tokens,
+                        answer_only=answer_only,
+                    )
             else:
                 images, questions, pseudo_texts = _apply_corruption(
                     corruptor, images, questions, pseudo_texts, level, corrupt_text_target
